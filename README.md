@@ -1,14 +1,46 @@
 # AUTO-Superset
 
+[![Release](https://img.shields.io/badge/release-v1.0-blue)](https://github.com/AntonKhakhalin/AUTO-Superset/releases/tag/v1.0)
+[![Superset](https://img.shields.io/badge/Superset-1.27.0%2B-6f42c1)](https://github.com/superset-sh/superset/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)](#compatibility-and-limits)
+[![Status](https://img.shields.io/badge/status-public%20preview-orange)](#compatibility-and-limits)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **Give Superset a coordinator that can delegate work, track quota, supervise workers, and recover interrupted sessions.**
 
 AUTO-Superset adds two workflows to [Superset](https://superset.sh): **Fast Fix** for small corrections and **Feature** for work that needs planning and coordinated implementation. It packages the AUTO runtime, OpenCode plugins, agent configuration, and project policies into a portable installer.
 
 **Public preview · macOS · Superset 1.27.0+ · AUTO 9.9.4.1-public.1**
 
+> **Already use Superset?** AUTO-Superset installs alongside your existing setup. It does not replace Superset or your provider CLIs, and the installer is designed to preserve existing Superset projects, sessions, settings, and native agent configurations. Run the dry-run first; successful installs create a restore point.
+
 > This is an independent community project. Superset and each provider CLI are installed separately. Offline installation/recovery checks are included; a live macOS smoke test is still required before relying on unattended operation.
 
-[Quick start](#quick-start) · [Setup guide](docs/setup.md) · [Workflow](docs/workflow.md) · [Troubleshooting](docs/troubleshooting.md) · [Source audit](docs/source-audit.md)
+[**Get v1.0**](https://github.com/AntonKhakhalin/AUTO-Superset/releases/tag/v1.0) · [Quick start](#quick-start) · [Setup guide](docs/setup.md) · [Workflow](docs/workflow.md) · [Troubleshooting](docs/troubleshooting.md) · [Source audit](docs/source-audit.md)
+
+## Already use Superset? Start here
+
+If Superset and your preferred provider CLI are already working, the shortest safe path is:
+
+1. Stop active AUTO workers and quit Superset completely.
+2. Clone this repository or download the reviewed [v1.0 release](https://github.com/AntonKhakhalin/AUTO-Superset/releases/tag/v1.0).
+3. Preview the install before changing anything.
+4. Install only the provider routes you actually want.
+5. Initialize your repository's AUTO project policy, then run the doctor and live smoke test.
+
+```sh
+git clone https://github.com/AntonKhakhalin/AUTO-Superset.git
+cd AUTO-Superset
+bash install.sh --dry-run
+bash install.sh
+
+python3 scripts/setup.py init-project --project /path/to/your/repository
+python3 scripts/setup.py doctor
+```
+
+Reopen Superset, open your project workspace, and choose **AUTO · Fast Fix** or **AUTO · Feature** from the agent picker.
+
+You do **not** need every supported provider. The default selection is OpenCode + Codex; start with one worker provider and add others only when you want their routes or quota pool.
 
 ## What it adds
 
@@ -20,6 +52,18 @@ AUTO-Superset adds two workflows to [Superset](https://superset.sh): **Fast Fix*
 - **Project-specific rules.** Loads your repository's `AGENTS.md` and `.superset/AUTO_PROJECT.md` with policy fingerprints and integration checks.
 
 The coordinator currently uses **Muse Spark 1.3 through OpenCode**. It is not an interchangeable coordinator backend. Worker providers are optional, and model access depends on your accounts.
+
+## Choose a workflow
+
+| | Fast Fix | Feature |
+| --- | --- | --- |
+| Best for | Local bugs and small existing-feature changes | New features and changes across components |
+| Planning | Short inspection; no mandatory planner for a small fix | Eligible strategic planner when needed |
+| Execution | Direct micro-fix or one scoped worker | Scoped workers with explicit ownership |
+| Validation | Focused checks for the affected behavior | Checks and review proportional to risk |
+| Escalation | Moves to Feature when evidence warrants it | Preserves the task contract through recovery |
+
+AUTO never schedules extra work just to consume subscription quota. Unselected providers are excluded from routing and telemetry, including cached quota records.
 
 ## Quick start
 
@@ -78,18 +122,6 @@ python3 scripts/setup.py doctor
 ```
 
 Use a small, reversible task first, such as a documentation correction. Follow the [live smoke test](docs/setup.md#live-smoke-test) to verify launch, completion, and your selected providers.
-
-## Choose a workflow
-
-| | Fast Fix | Feature |
-| --- | --- | --- |
-| Best for | Local bugs and small existing-feature changes | New features and changes across components |
-| Planning | Short inspection; no mandatory planner for a small fix | Eligible strategic planner when needed |
-| Execution | Direct micro-fix or one scoped worker | Scoped workers with explicit ownership |
-| Validation | Focused checks for the affected behavior | Checks and review proportional to risk |
-| Escalation | Moves to Feature when evidence warrants it | Preserves the task contract through recovery |
-
-AUTO never schedules extra work just to consume subscription quota. Unselected providers are excluded from routing and telemetry, including cached quota records.
 
 ## Repository layout
 
