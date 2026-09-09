@@ -1,0 +1,148 @@
+{
+  "schemaVersion": 1,
+  "workflowRevision": "9.9.4.1-public.1",
+  "supersetMinimumVersion": "1.27.0",
+  "description": "Logical routes inherited from AUTO 9.9.4.1; verify models and efforts against your installed provider catalog.",
+  "routes": {
+    "Codex · Astra Planner XHigh": {
+      "launchMode": "native",
+      "baseAgentLabel": "Codex",
+      "presetId": "codex",
+      "model": "gpt-6-astra",
+      "effort": "xhigh",
+      "capability": "PLAN_ONLY",
+      "quotaPool": "codex"
+    },
+    "Codex · Astra XHigh": {
+      "launchMode": "native",
+      "baseAgentLabel": "Codex",
+      "presetId": "codex",
+      "model": "gpt-6-astra",
+      "effort": "xhigh",
+      "capability": "IMPLEMENT",
+      "quotaPool": "codex"
+    },
+    "Codex · Astra Max": {
+      "launchMode": "native",
+      "baseAgentLabel": "Codex",
+      "presetId": "codex",
+      "model": "gpt-6-astra",
+      "effort": "max",
+      "capability": "IMPLEMENT",
+      "quotaPool": "codex"
+    },
+    "Codex · Astra Ultra": {
+      "launchMode": "legacy",
+      "baseAgentLabel": "Codex · Astra Ultra",
+      "presetId": "custom",
+      "model": "gpt-6-astra",
+      "effort": "ultra",
+      "capability": "IMPLEMENT",
+      "quotaPool": "codex",
+      "reason": "Superset 1.27.0 intentionally does not advertise Astra Ultra; preserve the existing custom escape hatch until the live Codex catalog and Superset both authorize it."
+    },
+    "Codex · Sol XHigh": {
+      "launchMode": "native",
+      "baseAgentLabel": "Codex",
+      "presetId": "codex",
+      "model": "gpt-5.6-sol",
+      "effort": "xhigh",
+      "capability": "IMPLEMENT",
+      "quotaPool": "codex"
+    },
+    "Codex · Sol Max": {
+      "launchMode": "native",
+      "baseAgentLabel": "Codex",
+      "presetId": "codex",
+      "model": "gpt-5.6-sol",
+      "effort": "max",
+      "capability": "IMPLEMENT",
+      "quotaPool": "codex"
+    },
+    "Codex · Terra High": {
+      "launchMode": "native",
+      "baseAgentLabel": "Codex",
+      "presetId": "codex",
+      "model": "gpt-5.6-terra",
+      "effort": "high",
+      "capability": "IMPLEMENT",
+      "quotaPool": "codex"
+    },
+    "Codex · Luna Medium": {
+      "launchMode": "native",
+      "baseAgentLabel": "Codex",
+      "presetId": "codex",
+      "model": "gpt-5.6-luna",
+      "effort": "medium",
+      "capability": "IMPLEMENT",
+      "quotaPool": "codex",
+      "autoEligible": false
+    },
+    "Claude · Sonnet 5 High": {
+      "launchMode": "native",
+      "baseAgentLabel": "Claude",
+      "presetId": "claude",
+      "model": "claude-sonnet-5",
+      "effort": "high",
+      "capability": "IMPLEMENT",
+      "quotaPool": "claude",
+      "autoEligible": false
+    },
+    "Claude · Opus 5 High": {
+      "launchMode": "native",
+      "baseAgentLabel": "Claude",
+      "presetId": "claude",
+      "model": "claude-opus-5",
+      "effort": "high",
+      "capability": "IMPLEMENT",
+      "quotaPool": "claude"
+    },
+    "Claude · Opus 5 XHigh": {
+      "launchMode": "native",
+      "baseAgentLabel": "Claude",
+      "presetId": "claude",
+      "model": "claude-opus-5",
+      "effort": "xhigh",
+      "capability": "IMPLEMENT",
+      "quotaPool": "claude"
+    },
+    "Claude · Opus 5 Max": {
+      "launchMode": "native",
+      "baseAgentLabel": "Claude",
+      "presetId": "claude",
+      "model": "claude-opus-5",
+      "effort": "max",
+      "capability": "IMPLEMENT",
+      "quotaPool": "claude"
+    },
+    "Cursor · Grok 4.6 XHigh": {
+      "launchMode": "native",
+      "baseAgentLabel": "Cursor",
+      "presetId": "cursor-agent",
+      "model": "cursor-grok-4.6-high",
+      "effort": "xhigh",
+      "capability": "IMPLEMENT",
+      "quotaPool": "cursorModels"
+    },
+    "Cursor · GPT-5.6 Sol Max": {
+      "launchMode": "native",
+      "baseAgentLabel": "Cursor Plan",
+      "presetId": "cursor-agent",
+      "model": "gpt-5.6-sol-medium",
+      "effort": "max",
+      "capability": "PLAN_OR_IMPLEMENT",
+      "quotaPool": "cursorOtherModels",
+      "notes": "Cursor Plan preserves the existing --mode=plan launch behavior while model/effort become native per-launch selections."
+    },
+    "Cursor · Fable 5 High": {
+      "launchMode": "native",
+      "baseAgentLabel": "Cursor",
+      "presetId": "cursor-agent",
+      "model": "claude-fable-5-thinking-high",
+      "effort": "high",
+      "capability": "IMPLEMENT",
+      "quotaPool": "cursorOtherModels",
+      "notes": "Uses Superset 1.27.0's curated Fable 5 thinking/high Cursor family rather than the old uncurated claude-fable-5 token."
+    }
+  }
+}

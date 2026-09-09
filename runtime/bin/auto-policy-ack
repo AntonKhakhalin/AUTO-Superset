@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Acknowledge the current repository AUTO policy fingerprint for one coordinator run.
+
+This helper is deliberately non-inference. It reloads AGENTS.md/AUTO_PROJECT via
+`auto-policy-context`, prints the project supplement when present, and writes an
+atomic receipt consumed by `auto-policy-git-guard`.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+from typing import Any
+
+
+def eprint(*args: object) -> None:
+    print(*args, file=sys.stderr, flush=True)
+
+
+def policy_helper() -> str:
+    return os.environ.get("SUPERSET_AUTO_POLICY_CONTEXT_BIN") or str(
+        Path.home() / ".superset" / "bin" / "auto-policy-context"
+    )
+
+
+def read_context(cwd: Path) -> dict[str, Any]:
+    cp = subprocess.run(
+        [policy_helper(), "--cwd", str(cwd), "--json"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=10,
+        check=False,
+        env=os.environ.copy(),
+    )
+    if cp.returncode != 0:
+        raise RuntimeError((cp.stderr or "policy context failed").strip())
+    doc = json.loads(cp.stdout)
+    if not isinstance(doc, dict) or not doc.get("repoRoot"):
+        raise RuntimeError("invalid AUTO policy context")
+    return doc
+
+
+def fingerprint(doc: dict[str, Any]) -> str:
+    agents = doc.get("agents") if isinstance(doc.get("agents"), dict) else {}
+    ap = doc.get("autoProject") if isinstance(doc.get("autoProject"), dict) else {}
+    payload = {
+        "repoRoot": str(doc.get("repoRoot") or ""),
+        "agentsPresent": bool(agents.get("present")),
+        "agentsSha256": str(agents.get("sha256") or "none"),
+        "autoProjectPresent": bool(ap.get("present")),
+        "autoProjectSha256": str(ap.get("sha256") or "none"),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def receipt_path(run_id: str, repo_root: str) -> Path:
+    base = Path(os.environ.get("SUPERSET_AUTO_POLICY_ACK_ROOT") or (
+        Path(tempfile.gettempdir()) / "superset-auto-policy-acks"
+    ))
+    root_key = hashlib.sha256(repo_root.encode()).hexdigest()[:24]
+    safe_run = "".join(ch for ch in run_id if ch.isalnum() or ch in "._-")[:96] or "run"
+    return base / safe_run / f"{root_key}.json"
+
+
+def print_project_policy(doc: dict[str, Any]) -> None:
+    agents = doc.get("agents") if isinstance(doc.get("agents"), dict) else {}
+    ap = doc.get("autoProject") if isinstance(doc.get("autoProject"), dict) else {}
+    print("AUTO POLICY INTEGRATION CHECKPOINT")
+    print(f"repoRoot: {doc.get('repoRoot')}")
+    print(f"AGENTS.md: present={bool(agents.get('present'))} sha256={agents.get('sha256') or 'none'}")
+    print(f"AUTO_PROJECT: present={bool(ap.get('present'))} sha256={ap.get('sha256') or 'none'}")
+    if not ap.get("present"):
+        print("AUTO_PROJECT supplemental policy is absent in this worktree.")
+        return
+    path = Path(str(ap.get("path") or ""))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        raise RuntimeError(f"unable to read {path}: {exc}") from exc
+    print("----- BEGIN .superset/AUTO_PROJECT.md (MANDATORY REVIEW BEFORE INTEGRATION) -----")
+    print(text.rstrip())
+    print("----- END .superset/AUTO_PROJECT.md -----")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Acknowledge Superset AUTO project policy for guarded Git integration")
+    parser.add_argument("--cwd", default=os.getcwd())
+    parser.add_argument("--phase", default="integration", choices=["integration"])
+    parser.add_argument("--run-id", default=os.environ.get("SUPERSET_AUTO_POLICY_RUN_ID", ""))
+    ns = parser.parse_args()
+
+    if not ns.run_id:
+        eprint("ERROR: SUPERSET_AUTO_POLICY_RUN_ID is missing; run this inside an AUTO coordinator session.")
+        return 64
+
+    try:
+        doc = read_context(Path(ns.cwd).resolve())
+        print_project_policy(doc)
+        fp = fingerprint(doc)
+        target = receipt_path(ns.run_id, str(doc["repoRoot"]))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        receipt = {
+            "version": "v9.8.19",
+            "runId": ns.run_id,
+            "phase": ns.phase,
+            "repoRoot": str(doc["repoRoot"]),
+            "fingerprint": fp,
+            "agentsSha256": ((doc.get("agents") or {}).get("sha256") or None),
+            "autoProjectPresent": bool((doc.get("autoProject") or {}).get("present")),
+            "autoProjectSha256": ((doc.get("autoProject") or {}).get("sha256") or None),
+            "acknowledgedAtUnix": int(time.time()),
+        }
+        tmp = target.with_name(target.name + f".tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, target)
+        print(f"AUTO_POLICY_ACKNOWLEDGED phase={ns.phase} fingerprint={fp} receipt={target}")
+        return 0
+    except Exception as exc:
+        eprint(f"ERROR: AUTO policy acknowledgement failed: {exc}")
+        return 70
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

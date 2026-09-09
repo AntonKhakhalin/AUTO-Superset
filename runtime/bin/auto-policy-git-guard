@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Coordinator-only Git shim enforcing AUTO_PROJECT integration acknowledgement.
+
+Read-only Git stays transparent. When a Muse AUTO coordinator attempts an
+integration/publish mutation in a worktree containing `.superset/AUTO_PROJECT.md`,
+the command is rejected until `auto-policy-ack --phase integration` has written a
+receipt for the current policy fingerprint and coordinator run.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+from typing import Any
+
+PROTECTED = {"commit", "merge", "cherry-pick", "rebase", "pull", "push"}
+GLOBAL_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"}
+
+
+def eprint(*args: object) -> None:
+    print(*args, file=sys.stderr, flush=True)
+
+
+def real_git() -> str:
+    configured = os.environ.get("SUPERSET_AUTO_REAL_GIT")
+    if configured and Path(configured).is_file() and os.access(configured, os.X_OK):
+        return configured
+    me = Path(sys.argv[0]).resolve()
+    for candidate in ("/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"):
+        p = Path(candidate)
+        if p.is_file() and os.access(p, os.X_OK) and p.resolve() != me:
+            return str(p)
+    raise RuntimeError("real git executable not found")
+
+
+def effective_cwd_and_command(args: list[str]) -> tuple[Path, str | None]:
+    cwd = Path.cwd()
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "-C":
+            if i + 1 >= len(args):
+                return cwd.resolve(), None
+            nxt = Path(args[i + 1])
+            cwd = (cwd / nxt).resolve() if not nxt.is_absolute() else nxt.resolve()
+            i += 2
+            continue
+        if arg.startswith("-C") and len(arg) > 2:
+            nxt = Path(arg[2:])
+            cwd = (cwd / nxt).resolve() if not nxt.is_absolute() else nxt.resolve()
+            i += 1
+            continue
+        if arg in GLOBAL_VALUE_OPTS:
+            i += 2
+            continue
+        if arg.startswith("-c") and arg != "-c":
+            i += 1
+            continue
+        if arg.startswith("--git-dir=") or arg.startswith("--work-tree=") or arg.startswith("--namespace=") or arg.startswith("--config-env="):
+            i += 1
+            continue
+        if arg.startswith("-"):
+            i += 1
+            continue
+        return cwd.resolve(), arg
+    return cwd.resolve(), None
+
+
+def policy_helper() -> str:
+    return os.environ.get("SUPERSET_AUTO_POLICY_CONTEXT_BIN") or str(
+        Path.home() / ".superset" / "bin" / "auto-policy-context"
+    )
+
+
+def read_context(cwd: Path) -> dict[str, Any]:
+    cp = subprocess.run(
+        [policy_helper(), "--cwd", str(cwd), "--json"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=10,
+        check=False,
+        env=os.environ.copy(),
+    )
+    if cp.returncode != 0:
+        raise RuntimeError((cp.stderr or "policy context failed").strip())
+    doc = json.loads(cp.stdout)
+    if not isinstance(doc, dict) or not doc.get("repoRoot"):
+        raise RuntimeError("invalid AUTO policy context")
+    return doc
+
+
+def fingerprint(doc: dict[str, Any]) -> str:
+    agents = doc.get("agents") if isinstance(doc.get("agents"), dict) else {}
+    ap = doc.get("autoProject") if isinstance(doc.get("autoProject"), dict) else {}
+    payload = {
+        "repoRoot": str(doc.get("repoRoot") or ""),
+        "agentsPresent": bool(agents.get("present")),
+        "agentsSha256": str(agents.get("sha256") or "none"),
+        "autoProjectPresent": bool(ap.get("present")),
+        "autoProjectSha256": str(ap.get("sha256") or "none"),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def receipt_path(run_id: str, repo_root: str) -> Path:
+    base = Path(os.environ.get("SUPERSET_AUTO_POLICY_ACK_ROOT") or (
+        Path(tempfile.gettempdir()) / "superset-auto-policy-acks"
+    ))
+    root_key = hashlib.sha256(repo_root.encode()).hexdigest()[:24]
+    safe_run = "".join(ch for ch in run_id if ch.isalnum() or ch in "._-")[:96] or "run"
+    return base / safe_run / f"{root_key}.json"
+
+
+def receipt_valid(path: Path, run_id: str, repo_root: str, fp: str) -> bool:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return (
+            data.get("version") == "v9.8.19"
+            and data.get("runId") == run_id
+            and data.get("phase") == "integration"
+            and data.get("repoRoot") == repo_root
+            and data.get("fingerprint") == fp
+        )
+    except Exception:
+        return False
+
+
+def exec_real(git: str, args: list[str]) -> int:
+    os.execv(git, [git, *args])
+    return 127
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    try:
+        git = real_git()
+    except Exception as exc:
+        eprint(f"ERROR: AUTO Git guard cannot locate real git: {exc}")
+        return 70
+
+    # Outside the guarded top-level Muse coordinator, behave exactly like git.
+    if os.environ.get("SUPERSET_AUTO") != "1" or os.environ.get("SUPERSET_AUTO_COORDINATOR_GIT_GUARD") != "1":
+        return exec_real(git, args)
+
+    cwd, command = effective_cwd_and_command(args)
+    if command not in PROTECTED:
+        return exec_real(git, args)
+
+    run_id = os.environ.get("SUPERSET_AUTO_POLICY_RUN_ID", "")
+    if not run_id:
+        eprint("AUTO_POLICY_CHECKPOINT_BLOCKED: coordinator run ID missing; refusing guarded Git mutation.")
+        return 78
+
+    try:
+        doc = read_context(cwd)
+    except Exception as exc:
+        eprint(f"AUTO_POLICY_CHECKPOINT_BLOCKED: policy context unavailable for {cwd}: {exc}")
+        return 78
+
+    ap = doc.get("autoProject") if isinstance(doc.get("autoProject"), dict) else {}
+    if not bool(ap.get("present")):
+        return exec_real(git, args)
+
+    repo_root = str(doc["repoRoot"])
+    fp = fingerprint(doc)
+    receipt = receipt_path(run_id, repo_root)
+    if receipt_valid(receipt, run_id, repo_root, fp):
+        return exec_real(git, args)
+
+    agents = doc.get("agents") if isinstance(doc.get("agents"), dict) else {}
+    eprint("AUTO_POLICY_CHECKPOINT_REQUIRED: guarded coordinator Git mutation was blocked before execution.")
+    eprint(f"command={command} repoRoot={repo_root}")
+    eprint(f"AGENTS_SHA256={agents.get('sha256') or 'none'}")
+    eprint(f"AUTO_PROJECT_SHA256={ap.get('sha256') or 'none'}")
+    eprint("The current .superset/AUTO_PROJECT.md must be surfaced again before integration/publish continues.")
+    eprint("Run this from the exact target worktree, then retry the Git command:")
+    eprint(f'  "$HOME/.superset/bin/auto-policy-ack" --phase integration --cwd "{repo_root}"')
+    eprint("Do NOT bypass this guard by invoking /usr/bin/git or altering PATH.")
+    return 78
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

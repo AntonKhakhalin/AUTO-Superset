@@ -1,0 +1,499 @@
+#!/bin/bash
+# SUPERSET_AUTO_DISPATCH_V990_NATIVE_ROUTE_CATALOG
+#
+# Registers every durable terminal worker with one non-model workspace supervisor.
+# Superset lifecycle hooks are preferred; terminal reads are adaptive fallback.
+# The public dispatch JSON and quota/policy gates remain compatible.
+
+set -u
+
+REAL="${SUPERSET_AUTO_DISPATCH_REAL:-$HOME/.superset/bin/auto-dispatch.real-v9.9.0}"
+ROUTE_RESOLVER="${SUPERSET_AUTO_ROUTE_RESOLVER:-$HOME/.superset/bin/auto-route-resolve}"
+GATE="${SUPERSET_AUTO_CODEX_GATE:-$HOME/.superset/bin/auto-codex-quota-gate}"
+CURSOR_GATE="${SUPERSET_AUTO_CURSOR_GATE:-$HOME/.superset/bin/auto-cursor-quota-gate}"
+POLICY_CONTEXT="${SUPERSET_AUTO_POLICY_CONTEXT_BIN:-$HOME/.superset/bin/auto-policy-context}"
+WORKSPACE_SUPERVISOR="${SUPERSET_AUTO_WORKSPACE_SUPERVISOR_BIN:-$HOME/.superset/bin/auto-workspace-supervisor}"
+HOOK_INSTALL="${SUPERSET_AUTO_HOOK_INSTALL_BIN:-$HOME/.superset/bin/auto-hook-install}"
+AUTO_PRESENT="${SUPERSET_AUTO_PRESENT_BIN:-$HOME/.superset/bin/auto-present}"
+REGISTRY_ROOT="${SUPERSET_AUTO_WORKER_REGISTRY_ROOT:-${TMPDIR:-/tmp}/superset-auto-worker-registry}"
+PRESENTATION=0
+ROUTE_JSON=""
+ROUTE_MODE=""
+ROUTE_MODEL=""
+ROUTE_EFFORT=""
+ROUTE_BASE_LABEL=""
+
+audit() {
+  local msg="$*"
+  local log="${SUPERSET_HOME_DIR:-$HOME/.superset}/auto/coordinator-presentation.log"
+  mkdir -p "$(dirname "$log")" 2>/dev/null || true
+  printf "%s\n" "$msg" >> "$log" 2>/dev/null || true
+  [[ "${SUPERSET_AUTO_PRESENTATION_DEBUG:-0}" == "1" ]] && printf "%s\n" "$msg" >&2 || true
+}
+
+# Keep the existing leaf safety check ahead of any quota or prompt work.
+if [[ "${SUPERSET_MUSE_LEAF:-0}" == "1" ]]; then
+  echo "ERROR: Muse leaf workers may not dispatch child agents." >&2
+  exit 64
+fi
+
+if [[ ! -x "$REAL" ]]; then
+  echo "ERROR: preserved AUTO dispatcher unavailable: $REAL" >&2
+  exit 70
+fi
+if [[ ! -x "$POLICY_CONTEXT" ]]; then
+  echo "ERROR: AUTO policy context helper unavailable: $POLICY_CONTEXT" >&2
+  exit 70
+fi
+if [[ ! -x "$WORKSPACE_SUPERVISOR" ]]; then
+  echo "ERROR: AUTO workspace supervisor unavailable: $WORKSPACE_SUPERVISOR" >&2
+  exit 70
+fi
+if [[ ! -x "$ROUTE_RESOLVER" ]]; then
+  echo "ERROR: AUTO route resolver unavailable: $ROUTE_RESOLVER" >&2
+  exit 70
+fi
+
+LABEL=""
+PROMPT_FILE=""
+INLINE_PROMPT=""
+PROMPT_STDIN=0
+HANDOFF_AUTO=0
+WORKSPACE_ID=""
+HANDOFF_FILE=""
+TASK_ID=""
+WORKER_ROLE=""
+INPUT_PROMPT_FILE=""
+TMP_PROMPT=""
+ORIGINAL_ARGS=("$@")
+ARGS=()
+
+cleanup() {
+  if [[ -n "$TMP_PROMPT" && -f "$TMP_PROMPT" ]]; then
+    rm -f "$TMP_PROMPT"
+  fi
+  if [[ -n "$INPUT_PROMPT_FILE" && -f "$INPUT_PROMPT_FILE" ]]; then
+    rm -f "$INPUT_PROMPT_FILE"
+  fi
+}
+trap cleanup EXIT INT TERM HUP
+
+# --handoff/--task/--handoff-auto/--prompt-stdin are wrapper-level contract
+# controls. Wrapper-only options are removed before the preserved dispatcher so
+# older real dispatchers remain compatible. Existing explicit --prompt-file /
+# --handoff callers remain supported.
+for ((i=0; i<${#ORIGINAL_ARGS[@]}; i++)); do
+  arg="${ORIGINAL_ARGS[$i]}"
+  case "$arg" in
+    --label)
+      if (( i + 1 < ${#ORIGINAL_ARGS[@]} )); then LABEL="${ORIGINAL_ARGS[$((i+1))]}"; fi
+      ARGS+=("$arg")
+      if (( i + 1 < ${#ORIGINAL_ARGS[@]} )); then ARGS+=("${ORIGINAL_ARGS[$((i+1))]}"); ((i++)); fi
+      ;;
+    --prompt-file)
+      if (( i + 1 < ${#ORIGINAL_ARGS[@]} )); then PROMPT_FILE="${ORIGINAL_ARGS[$((i+1))]}"; fi
+      ARGS+=("$arg")
+      if (( i + 1 < ${#ORIGINAL_ARGS[@]} )); then ARGS+=("${ORIGINAL_ARGS[$((i+1))]}"); ((i++)); fi
+      ;;
+    --prompt-stdin)
+      PROMPT_STDIN=1
+      ;;
+    --prompt)
+      if (( i + 1 < ${#ORIGINAL_ARGS[@]} )); then INLINE_PROMPT="${ORIGINAL_ARGS[$((i+1))]}"; fi
+      ARGS+=("$arg")
+      if (( i + 1 < ${#ORIGINAL_ARGS[@]} )); then ARGS+=("${ORIGINAL_ARGS[$((i+1))]}"); ((i++)); fi
+      ;;
+    --handoff)
+      if (( i + 1 >= ${#ORIGINAL_ARGS[@]} )); then
+        echo "ERROR: --handoff requires a value" >&2
+        exit 64
+      fi
+      HANDOFF_FILE="${ORIGINAL_ARGS[$((i+1))]}"
+      ((i++))
+      ;;
+    --handoff-auto)
+      HANDOFF_AUTO=1
+      ;;
+    --presentation)
+      PRESENTATION=1
+      ;;
+    --workspace)
+      if (( i + 1 >= ${#ORIGINAL_ARGS[@]} )); then
+        echo "ERROR: --workspace requires a value" >&2
+        exit 64
+      fi
+      WORKSPACE_ID="${ORIGINAL_ARGS[$((i+1))]}"
+      ARGS+=("$arg" "${ORIGINAL_ARGS[$((i+1))]}")
+      ((i++))
+      ;;
+    --task)
+      if (( i + 1 >= ${#ORIGINAL_ARGS[@]} )); then
+        echo "ERROR: --task requires a value" >&2
+        exit 64
+      fi
+      TASK_ID="${ORIGINAL_ARGS[$((i+1))]}"
+      ((i++))
+      ;;
+    *)
+      ARGS+=("$arg")
+      ;;
+  esac
+done
+
+# v9.9.0 logical route catalog. Human-facing AUTO labels remain stable while
+# native Superset 1.27 model/effort overrides select the concrete model at
+# launch. Uncatalogued labels remain valid physical agents for compatibility.
+if [[ -n "$LABEL" ]] && "$ROUTE_RESOLVER" --exists "$LABEL" >/dev/null 2>&1; then
+  ROUTE_JSON="$("$ROUTE_RESOLVER" "$LABEL")" || {
+    echo "ERROR: unable to resolve AUTO route: $LABEL" >&2
+    exit 70
+  }
+  ROUTE_MODE="$(printf '%s' "$ROUTE_JSON" | jq -r '.launchMode // empty')"
+  ROUTE_BASE_LABEL="$(printf '%s' "$ROUTE_JSON" | jq -r '.baseAgentLabel // empty')"
+  ROUTE_MODEL="$(printf '%s' "$ROUTE_JSON" | jq -r '.model // empty')"
+  ROUTE_EFFORT="$(printf '%s' "$ROUTE_JSON" | jq -r '.effort // empty')"
+
+  case "$ROUTE_MODE" in
+    native)
+      [[ -n "$ROUTE_BASE_LABEL" && -n "$ROUTE_MODEL" ]] || {
+        echo "ERROR: native AUTO route is incomplete: $LABEL" >&2
+        exit 70
+      }
+      ARGS+=("--model" "$ROUTE_MODEL")
+      [[ -n "$ROUTE_EFFORT" ]] && ARGS+=("--effort" "$ROUTE_EFFORT")
+      audit "AUTO ROUTE: logical='$LABEL' base='$ROUTE_BASE_LABEL' model='$ROUTE_MODEL' effort='${ROUTE_EFFORT:-default}' mode=native"
+      ;;
+    legacy)
+      audit "AUTO ROUTE: logical='$LABEL' base='$ROUTE_BASE_LABEL' model='$ROUTE_MODEL' effort='${ROUTE_EFFORT:-default}' mode=legacy"
+      ;;
+    *)
+      echo "ERROR: unsupported AUTO route launchMode '$ROUTE_MODE' for '$LABEL'" >&2
+      exit 70
+      ;;
+  esac
+fi
+
+# v9.8.15 one-shot contract input. The coordinator can stream the complete
+# worker contract directly to auto-dispatch instead of model-managing empty
+# tempfiles. This wrapper owns the temporary prompt lifecycle.
+if (( PROMPT_STDIN == 1 )); then
+  if [[ -n "$PROMPT_FILE" || -n "$INLINE_PROMPT" ]]; then
+    echo "ERROR: --prompt-stdin cannot be combined with --prompt-file or --prompt" >&2
+    exit 64
+  fi
+  INPUT_PROMPT_FILE="$(mktemp -t superset-auto-worker-contract.XXXXXX)" || exit 70
+  cat > "$INPUT_PROMPT_FILE"
+  if [[ ! -s "$INPUT_PROMPT_FILE" ]]; then
+    rm -f "$INPUT_PROMPT_FILE"
+    echo "ERROR: --prompt-stdin received an empty worker contract" >&2
+    exit 64
+  fi
+  PROMPT_FILE="$INPUT_PROMPT_FILE"
+  ARGS+=("--prompt-file" "$PROMPT_FILE")
+fi
+
+extract_worker_role_from_text() {
+  # Worker contracts are required to declare a role. Keep this parser narrow
+  # and operate on the ORIGINAL contract before runtime policy is prepended.
+  sed -nE 's/^[[:space:]]*[Rr][Oo][Ll][Ee][[:space:]]*[:=][[:space:]]*(.+)[[:space:]]*$/\1/p' 2>/dev/null | head -n 1
+}
+
+normalize_worker_role() {
+  printf '%s' "$1" \
+    | tr '[:lower:]_' '[:upper:] ' \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]-]+/ /g'
+}
+
+worker_role_requires_write() {
+  case "$1" in
+    *IMPLEMENT*|*FIX*|*INTEGRAT*|*WRITE*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+worker_role_is_nonwriting() {
+  case "$1" in
+    *"PLAN ONLY"*|*"REVIEW ONLY"*|*"READ ONLY"*|*DIAGNOS*|*CHALLENGER*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Resolve the declared role before any provider/quota work. PLAN-only routes
+# must never be launched for writable roles; otherwise the terminal can stay
+# perfectly healthy while being semantically incapable of completing the job.
+RAW_WORKER_ROLE=""
+if [[ -n "$PROMPT_FILE" && -f "$PROMPT_FILE" ]]; then
+  RAW_WORKER_ROLE="$(extract_worker_role_from_text < "$PROMPT_FILE" || true)"
+elif [[ -n "$INLINE_PROMPT" ]]; then
+  RAW_WORKER_ROLE="$(printf '%s\n' "$INLINE_PROMPT" | extract_worker_role_from_text || true)"
+fi
+if [[ -n "$RAW_WORKER_ROLE" ]]; then
+  WORKER_ROLE="$(normalize_worker_role "$RAW_WORKER_ROLE")"
+fi
+
+case "$LABEL" in
+  "Codex · Astra Planner XHigh"|"Anti · Gemini 3.1 Pro"|"Anti · Claude Opus 4.6")
+    if [[ -z "$WORKER_ROLE" ]]; then
+      echo "ERROR: AUTO_ROUTE_REJECTED label='$LABEL' requestedRole=UNKNOWN capability=PLAN_ONLY" >&2
+      echo "ERROR: PLAN-only routes require an explicit non-writing worker role; choose an implementation-capable fallback." >&2
+      exit 64
+    fi
+    if worker_role_requires_write "$WORKER_ROLE"; then
+      echo "ERROR: AUTO_ROUTE_REJECTED label='$LABEL' requestedRole='$WORKER_ROLE' capability=PLAN_ONLY" >&2
+      echo "ERROR: selected agent cannot satisfy writable role '$WORKER_ROLE'; choose the next Astra-approved implementation-capable fallback." >&2
+      exit 64
+    fi
+    if ! worker_role_is_nonwriting "$WORKER_ROLE"; then
+      echo "ERROR: AUTO_ROUTE_REJECTED label='$LABEL' requestedRole='$WORKER_ROLE' capability=PLAN_ONLY" >&2
+      echo "ERROR: worker role is not recognized as non-writing; fail closed and select another route." >&2
+      exit 64
+    fi
+    ;;
+esac
+
+case "$LABEL" in
+  "Codex · Astra Planner XHigh"|\
+  "Codex · Astra XHigh"|\
+  "Codex · Astra Max"|\
+  "Codex · Astra Ultra"|\
+  "Codex · Sol Max"|\
+  "Codex · Sol XHigh"|\
+  "Codex · Terra High")
+    if [[ ! -x "$GATE" ]]; then
+      echo "ERROR: Codex quota gate unavailable: $GATE" >&2
+      exit 70
+    fi
+    if ! "$GATE" --quiet; then
+      "$GATE" >&2 || true
+      exit 75
+    fi
+    ;;
+esac
+
+# Cursor Pro has monthly included pools and may have user-configured on-demand
+# billing. AUTO always refreshes the matching included pool before launch and
+# preserves the final 5%; this prevents quota-saturation policy from silently
+# becoming paid overage. Manual Cursor use outside AUTO is unaffected.
+case "$LABEL" in
+  "Cursor · Grok 4.6 XHigh")
+    if [[ ! -x "$CURSOR_GATE" ]]; then
+      echo "ERROR: Cursor quota gate unavailable: $CURSOR_GATE" >&2
+      exit 70
+    fi
+    "$CURSOR_GATE" --quiet cursorModels || exit 75
+    ;;
+  "Cursor · Fable 5 High"|"Cursor · GPT-5.6 Sol Max")
+    if [[ ! -x "$CURSOR_GATE" ]]; then
+      echo "ERROR: Cursor quota gate unavailable: $CURSOR_GATE" >&2
+      exit 70
+    fi
+    "$CURSOR_GATE" --quiet cursorOtherModels || exit 75
+    ;;
+esac
+
+BOOTSTRAP="$($POLICY_CONTEXT --worker --label "$LABEL")" || {
+  echo "ERROR: unable to render AUTO worker policy context" >&2
+  exit 70
+}
+
+extract_handoff_from_text() {
+  # Durable AUTO handoffs are deliberately unique and out-of-repo. Keep the
+  # fallback parser narrow so arbitrary paths in a worker prompt are ignored.
+  grep -Eo '/[^[:space:]"]*superset-auto-handoff\.[A-Za-z0-9._-]+\.txt' 2>/dev/null | tail -n 1
+}
+
+extract_task_from_text() {
+  sed -nE 's/^[[:space:]]*(Task ID|task):[[:space:]]*([^[:space:]]+).*$/\2/p' 2>/dev/null | head -n 1
+}
+
+# Extract supervision metadata BEFORE policy text is prepended.
+if [[ -z "$HANDOFF_FILE" ]]; then
+  if [[ -n "$PROMPT_FILE" && -f "$PROMPT_FILE" ]]; then
+    HANDOFF_FILE="$(extract_handoff_from_text < "$PROMPT_FILE" || true)"
+  elif [[ -n "$INLINE_PROMPT" ]]; then
+    HANDOFF_FILE="$(printf '%s\n' "$INLINE_PROMPT" | extract_handoff_from_text || true)"
+  fi
+fi
+if [[ -z "$TASK_ID" ]]; then
+  if [[ -n "$PROMPT_FILE" && -f "$PROMPT_FILE" ]]; then
+    TASK_ID="$(extract_task_from_text < "$PROMPT_FILE" || true)"
+  elif [[ -n "$INLINE_PROMPT" ]]; then
+    TASK_ID="$(printf '%s\n' "$INLINE_PROMPT" | extract_task_from_text || true)"
+  fi
+fi
+
+if (( HANDOFF_AUTO == 1 )); then
+  if [[ -n "$HANDOFF_FILE" ]]; then
+    echo "ERROR: --handoff-auto cannot be combined with --handoff or an embedded handoff path" >&2
+    exit 64
+  fi
+  SAFE_WS="$(printf '%s' "${WORKSPACE_ID:-workspace}" | tr -cd 'A-Za-z0-9._-' | cut -c1-40)"
+  SAFE_TASK="$(printf '%s' "${TASK_ID:-task}" | tr -cd 'A-Za-z0-9._-' | cut -c1-48)"
+  [[ -n "$SAFE_WS" ]] || SAFE_WS="workspace"
+  [[ -n "$SAFE_TASK" ]] || SAFE_TASK="task"
+  if command -v uuidgen >/dev/null 2>&1; then
+    NONCE="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+  else
+    NONCE="$(date +%s).$$.$RANDOM"
+  fi
+  HANDOFF_FILE="${TMPDIR:-/tmp}/superset-auto-handoff.${SAFE_WS}.${SAFE_TASK}.${NONCE}.txt"
+  if [[ -e "$HANDOFF_FILE" ]]; then
+    echo "ERROR: generated AUTO handoff path unexpectedly exists: $HANDOFF_FILE" >&2
+    exit 70
+  fi
+  audit "AUTO CONTRACT: generated nonexistent durable handoff path $HANDOFF_FILE"
+fi
+
+RUNTIME_HANDOFF_BLOCK=""
+if (( HANDOFF_AUTO == 1 )); then
+  RUNTIME_HANDOFF_BLOCK="$(printf '%s\n' \
+    '===== AUTO DURABLE HANDOFF (RUNTIME-INJECTED) =====' \
+    "Handoff file: $HANDOFF_FILE" \
+    'This final handoff path MUST NOT be created until the assignment is complete.' \
+    'Write the complete handoff to a temporary sibling and atomically rename it to the exact path above only after the full content is ready.' \
+    "The handoff must contain the assignment's required completion envelope (including SUPERSET_WORKER_DONE when required by the worker contract)." \
+    'Print the same final handoff to the terminal before exiting.' \
+    'Never publish DONE/FAILED directly into AUTO supervision state; the workspace supervisor owns registry state.' \
+    '===== END AUTO DURABLE HANDOFF =====')"
+fi
+
+# Every nontrivial AUTO worker normally uses --prompt-file. Prepend the runtime
+# inheritance block to a private temporary copy so the caller-owned contract is
+# left byte-for-byte untouched.
+if [[ -n "$PROMPT_FILE" ]]; then
+  if [[ ! -f "$PROMPT_FILE" ]]; then
+    echo "ERROR: worker prompt file does not exist: $PROMPT_FILE" >&2
+    exit 64
+  fi
+  TMP_PROMPT="$(mktemp -t superset-auto-policy-prompt.XXXXXX)" || exit 70
+  {
+    printf '%s\n\n===== ORIGINAL WORKER CONTRACT =====\n' "$BOOTSTRAP"
+    cat "$PROMPT_FILE"
+    if [[ -n "$RUNTIME_HANDOFF_BLOCK" ]]; then
+      printf '\n\n%s\n' "$RUNTIME_HANDOFF_BLOCK"
+    fi
+    printf '\n===== END ORIGINAL WORKER CONTRACT =====\n'
+  } > "$TMP_PROMPT"
+
+  for ((i=0; i<${#ARGS[@]}; i++)); do
+    if [[ "${ARGS[$i]}" == "--prompt-file" && $((i+1)) -lt ${#ARGS[@]} ]]; then
+      ARGS[$((i+1))]="$TMP_PROMPT"
+      break
+    fi
+  done
+elif [[ -n "$INLINE_PROMPT" ]]; then
+  for ((i=0; i<${#ARGS[@]}; i++)); do
+    if [[ "${ARGS[$i]}" == "--prompt" && $((i+1)) -lt ${#ARGS[@]} ]]; then
+      INLINE_COMBINED="$(printf '%s\n\n===== ORIGINAL WORKER CONTRACT =====\n%s' "$BOOTSTRAP" "$INLINE_PROMPT")"
+      if [[ -n "$RUNTIME_HANDOFF_BLOCK" ]]; then
+        INLINE_COMBINED="$(printf '%s\n\n%s' "$INLINE_COMBINED" "$RUNTIME_HANDOFF_BLOCK")"
+      fi
+      INLINE_COMBINED="$(printf '%s\n===== END ORIGINAL WORKER CONTRACT =====' "$INLINE_COMBINED")"
+      ARGS[$((i+1))]="$INLINE_COMBINED"
+      break
+    fi
+  done
+else
+  audit "AUTO POLICY: dispatch has no prompt payload; no inheritance block injected."
+fi
+
+POLICY_JSON="$($POLICY_CONTEXT --json 2>/dev/null || true)"
+if [[ -n "$POLICY_JSON" ]]; then
+  AP_PRESENT="$(jq -r '.autoProject.present // false' <<<"$POLICY_JSON")"
+  AP_SHA="$(jq -r '.autoProject.sha256 // "none"' <<<"$POLICY_JSON")"
+  audit "AUTO POLICY: worker label='${LABEL:-UNKNOWN}' AUTO_PROJECT present=$AP_PRESENT sha256=$AP_SHA"
+fi
+
+# v9.8.23: Superset rewrites its managed notify hook on app startup. Reinstall
+# the additive AUTO lifecycle tap idempotently before launch. Failure is not
+# fatal because the workspace supervisor retains adaptive terminal fallback.
+if [[ -x "$HOOK_INSTALL" ]]; then
+  "$HOOK_INSTALL" --quiet >/dev/null 2>&1 || audit "AUTO lifecycle tap unavailable; using adaptive terminal fallback for this dispatch"
+else
+  audit "AUTO lifecycle tap installer missing; using adaptive terminal fallback for this dispatch"
+fi
+
+# Capture the preserved dispatcher's structured result so we can register it
+# with the single workspace supervisor before returning control.
+DISPATCH_JSON="$($REAL "${ARGS[@]}")"
+RC=$?
+if (( RC != 0 )); then
+  [[ -n "$DISPATCH_JSON" ]] && printf '%s\n' "$DISPATCH_JSON" >&2
+  exit "$RC"
+fi
+
+if ! printf '%s' "$DISPATCH_JSON" | jq -e . >/dev/null 2>&1; then
+  echo "ERROR: preserved AUTO dispatcher returned invalid JSON." >&2
+  printf '%s\n' "$DISPATCH_JSON" >&2
+  exit 67
+fi
+
+RETURNED_WORKSPACE="$(printf '%s' "$DISPATCH_JSON" | jq -r '.workspaceId // empty')"
+TERMINAL_ID="$(printf '%s' "$DISPATCH_JSON" | jq -r '.terminalId // empty')"
+KIND="$(printf '%s' "$DISPATCH_JSON" | jq -r '.kind // empty')"
+
+# A successful new dispatch is concrete scheduler progress. Rearm foreground
+# collection by clearing prior RUNNING/79 same-terminal interlocks in this
+# workspace. Failed dispatches never clear the interlock. Explicit hard-
+# dependency/no-other-work overrides remain available directly on the watcher.
+if [[ -n "$RETURNED_WORKSPACE" ]]; then
+  YIELD_DIR="$REGISTRY_ROOT/$RETURNED_WORKSPACE/.foreground-yields"
+  if [[ -d "$YIELD_DIR" ]]; then
+    rm -f "$YIELD_DIR"/*.json 2>/dev/null || true
+  fi
+fi
+
+SUPERVISION_JSON='null'
+if [[ "$KIND" == "terminal" && -n "$TERMINAL_ID" ]]; then
+  if [[ -n "$HANDOFF_FILE" ]]; then
+    SESSION_ID="$(printf '%s' "$DISPATCH_JSON" | jq -r '.sessionId // empty')"
+    AGENT_ID="$(printf '%s' "$DISPATCH_JSON" | jq -r '.agentId // empty')"
+    REGISTER_JSON="$(
+      "$WORKSPACE_SUPERVISOR" register \
+        --workspace "$RETURNED_WORKSPACE" \
+        --terminal "$TERMINAL_ID" \
+        --session-id "$SESSION_ID" \
+        --handoff "$HANDOFF_FILE" \
+        --label "$LABEL" \
+        --agent-id "$AGENT_ID" \
+        --route-mode "$ROUTE_MODE" \
+        --base-agent-label "$ROUTE_BASE_LABEL" \
+        --model "$ROUTE_MODEL" \
+        --effort "$ROUTE_EFFORT" \
+        --task "$TASK_ID"
+    )"
+    REGISTER_RC=$?
+    if (( REGISTER_RC != 0 )) || ! printf '%s' "$REGISTER_JSON" | jq -e '.ok == true' >/dev/null 2>&1; then
+      echo "ERROR: workspace worker supervisor registration failed for terminal $TERMINAL_ID" >&2
+      [[ -n "$REGISTER_JSON" ]] && printf '%s\n' "$REGISTER_JSON" >&2
+      exit 70
+    fi
+    SUPERVISION_JSON="$REGISTER_JSON"
+    audit "AUTO SUPERVISION: workspace supervisor registered terminal=$TERMINAL_ID worker=$(printf '%s' "$REGISTER_JSON" | jq -r '.workerId // empty') pid=$(printf '%s' "$REGISTER_JSON" | jq -r '.pid // empty')"
+  else
+    audit "AUTO SUPERVISION WARNING: no durable handoff path found; workspace supervision was not registered. Pass --handoff <path>."
+  fi
+fi
+
+FINAL_JSON="$(printf '%s' "$DISPATCH_JSON" | jq \
+  --argjson supervision "$SUPERVISION_JSON" \
+  --arg logicalLabel "$LABEL" \
+  --arg routeMode "$ROUTE_MODE" \
+  --arg routeBaseLabel "$ROUTE_BASE_LABEL" \
+  --arg routeModel "$ROUTE_MODEL" \
+  --arg routeEffort "$ROUTE_EFFORT" \
+  '. + {
+    supervision:$supervision,
+    agentLabel:(if $logicalLabel == "" then .agentLabel else $logicalLabel end),
+    route:(if $routeMode == "" then null else {
+      launchMode:$routeMode,
+      baseAgentLabel:$routeBaseLabel,
+      model:(if $routeModel == "" then null else $routeModel end),
+      effort:(if $routeEffort == "" then null else $routeEffort end)
+    } end)
+  }')"
+if (( PRESENTATION == 1 )) && [[ -x "$AUTO_PRESENT" ]]; then
+  printf '%s\n' "$FINAL_JSON" | "$AUTO_PRESENT" dispatch
+else
+  printf '%s\n' "$FINAL_JSON"
+fi

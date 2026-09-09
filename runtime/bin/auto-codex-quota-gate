@@ -1,0 +1,117 @@
+#!/bin/bash
+# SUPERSET_CODEX_QUOTA_GATE_V9817_PROVIDER_ISOLATED
+set -u
+
+STATUS_BIN="${HOME}/.superset/bin/auto-quota-status"
+QUIET=0
+JSON_OUT=0
+for arg in "$@"; do
+  case "$arg" in
+    --quiet) QUIET=1 ;;
+    --json) JSON_OUT=1 ;;
+  esac
+done
+
+fail_gate() {
+  local reason="$1"
+  local detail="${2:-}"
+  if (( ! QUIET )); then
+    if [[ -n "$detail" ]]; then
+      echo "CODEX_QUOTA_GATE_CLOSED reason=${reason} ${detail}" >&2
+    else
+      echo "CODEX_QUOTA_GATE_CLOSED reason=${reason}" >&2
+    fi
+  fi
+  return 75
+}
+
+if [[ ! -x "$STATUS_BIN" ]]; then
+  fail_gate "quota_helper_unavailable" "helper=${STATUS_BIN}"
+  exit $?
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  fail_gate "jq_unavailable"
+  exit $?
+fi
+
+TMP="$(mktemp -t superset-codex-quota.XXXXXX)" || exit 75
+trap 'rm -f "$TMP"' EXIT HUP INT TERM
+
+# --force bypasses the top-level cache. The eligibility expression below also
+# requires source==codex-app-server, so provider-refresh fallback records marked
+# source=cache can never authorize a Codex inference.
+if ! "$STATUS_BIN" --force --json --no-cache-write --no-claude --no-muse-free --no-opencode-go --no-antigravity --no-cursor >"$TMP" 2>/dev/null; then
+  fail_gate "quota_read_failed"
+  exit $?
+fi
+
+RESULT="$(jq -c '
+  (.pools.codex // {}) as $c |
+  ($c.fiveHour.remainingPercent // null) as $five |
+  ($c.weekly.remainingPercent // null) as $week |
+  {
+    eligible: (
+      ($c.availability == "available") and
+      ($c.hardCap != true) and
+      ($c.freshness == "fresh") and
+      (($c.source // "unknown") == "codex-app-server") and
+      (($five | type) == "number") and
+      (($week | type) == "number") and
+      ($five > 5) and
+      ($week > 0)
+    ),
+    reason: (
+      if (($c.availability // "unknown") == "unknown") or
+         (($c.freshness // "unknown") != "fresh") or
+         (($c.source // "unknown") != "codex-app-server") or
+         (($five | type) != "number") or
+         (($week | type) != "number")
+      then "telemetry_unknown"
+      elif ($c.hardCap == true) or ($c.availability == "hard_capped")
+      then "hard_capped"
+      elif $week <= 0
+      then "weekly_capped"
+      elif $five <= 5
+      then "five_hour_floor"
+      elif $c.availability != "available"
+      then ($c.availability // "unavailable")
+      else "available"
+      end
+    ),
+    fiveHourRemainingPercent: $five,
+    weeklyRemainingPercent: $week,
+    fiveHourResetsAt: ($c.fiveHour.resetsAt // null),
+    weeklyResetsAt: ($c.weekly.resetsAt // null),
+    freshness: ($c.freshness // "unknown"),
+    ageSeconds: ($c.ageSeconds // null),
+    source: ($c.source // "unknown"),
+    hardCap: ($c.hardCap // false),
+    observedAt: ($c.observedAt // null)
+  }
+' "$TMP" 2>/dev/null)" || {
+  fail_gate "quota_parse_failed"
+  exit $?
+}
+
+if (( JSON_OUT )); then
+  printf '%s\n' "$RESULT"
+fi
+
+ELIGIBLE="$(printf '%s' "$RESULT" | jq -r '.eligible')"
+if [[ "$ELIGIBLE" == "true" ]]; then
+  if (( ! QUIET && ! JSON_OUT )); then
+    printf 'CODEX_QUOTA_GATE_OPEN fiveHourRemaining=%s%% weeklyRemaining=%s%% source=%s\n' \
+      "$(printf '%s' "$RESULT" | jq -r '.fiveHourRemainingPercent')" \
+      "$(printf '%s' "$RESULT" | jq -r '.weeklyRemainingPercent')" \
+      "$(printf '%s' "$RESULT" | jq -r '.source')"
+  fi
+  exit 0
+fi
+
+REASON="$(printf '%s' "$RESULT" | jq -r '.reason')"
+FIVE="$(printf '%s' "$RESULT" | jq -r '.fiveHourRemainingPercent // "unknown"')"
+WEEK="$(printf '%s' "$RESULT" | jq -r '.weeklyRemainingPercent // "unknown"')"
+FIVE_RESET="$(printf '%s' "$RESULT" | jq -r '.fiveHourResetsAt // "unknown"')"
+WEEK_RESET="$(printf '%s' "$RESULT" | jq -r '.weeklyResetsAt // "unknown"')"
+fail_gate "$REASON" "fiveHourRemaining=${FIVE}% weeklyRemaining=${WEEK}% fiveHourResetsAt=${FIVE_RESET} weeklyResetsAt=${WEEK_RESET}"
+exit $?

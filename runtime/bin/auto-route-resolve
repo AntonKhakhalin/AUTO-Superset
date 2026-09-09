@@ -1,0 +1,43 @@
+#!/bin/bash
+# SUPERSET_AUTO_ROUTE_RESOLVE_V990
+set -euo pipefail
+
+CATALOG="${SUPERSET_AUTO_ROUTE_CATALOG:-$HOME/.superset/auto/routes.json}"
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage:
+  auto-route-resolve <logical-route-label>
+  auto-route-resolve --base-label <logical-route-label>
+  auto-route-resolve --exists <logical-route-label>
+USAGE
+}
+
+[[ -r "$CATALOG" ]] || { echo "ERROR: AUTO route catalog unavailable: $CATALOG" >&2; exit 70; }
+command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required" >&2; exit 70; }
+
+mode="json"
+case "${1:-}" in
+  --base-label) mode="base"; shift ;;
+  --exists) mode="exists"; shift ;;
+  --help|-h) usage; exit 0 ;;
+esac
+
+label="${1:-}"
+[[ -n "$label" ]] || { usage; exit 64; }
+
+if ! jq -e --arg label "$label" '.routes[$label] != null' "$CATALOG" >/dev/null; then
+  [[ "$mode" == "exists" ]] && exit 1
+  echo "ERROR: AUTO logical route is not present in the route catalog: $label" >&2
+  exit 66
+fi
+
+case "$mode" in
+  exists) exit 0 ;;
+  base)
+    jq -er --arg label "$label" '.routes[$label].baseAgentLabel' "$CATALOG"
+    ;;
+  json)
+    jq -ec --arg label "$label" '.routes[$label] + {logicalLabel:$label}' "$CATALOG"
+    ;;
+esac

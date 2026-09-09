@@ -1,0 +1,852 @@
+#!/bin/zsh
+# SUPERSET_AUTO_WORKER_WATCH_V9821_HOST_SAFE_PASSIVE_WAIT
+#
+# Failure-aware non-model worker monitor with concurrent-worker supervision
+# and automatic completed-worker terminal cleanup.
+#
+# A normal foreground invocation still watches the requested terminal directly,
+# but it also checks the workspace worker-state registry for urgent terminal
+# events from OTHER delegated workers. This prevents a long synchronous wait on
+# worker A from starving quota/fatal supervision of worker B.
+#
+# A resident invocation (`--resident`) is started automatically by auto-dispatch
+# for every terminal worker with a durable handoff path. It watches exactly one
+# worker forever, publishes atomic state into the out-of-repo registry, and
+# never sends model messages or modifies the worktree. After a valid atomic
+# completion handoff is observed, the resident watcher closes that exact
+# terminal so completed agents do not remain parked in Superset.
+
+set -u
+
+WORKSPACE=""
+TERMINAL_ID=""
+HANDOFF=""
+LABEL=""
+TASK=""
+MAX_LINES=120
+INTERVAL=15
+WAIT_SECONDS=60
+ONCE=0
+RESIDENT=0
+STATE_FILE=""
+REGISTRY_ROOT="${SUPERSET_AUTO_WORKER_REGISTRY_ROOT:-${TMPDIR:-/tmp}/superset-auto-worker-registry}"
+PEER_EVENT_MAX_AGE="${SUPERSET_AUTO_WORKER_PEER_EVENT_MAX_AGE:-21600}"
+AUTO_CLOSE_COMPLETED="${SUPERSET_AUTO_CLOSE_COMPLETED_WORKERS:-1}"
+TERMINAL_CLOSE_ATTEMPTED=0
+TERMINAL_CLOSED=0
+TERMINAL_CLOSED_AT=""
+TERMINAL_CLOSE_ERROR=""
+TERMINAL_CLOSE_SKIPPED_REASON=""
+REWATCH_OVERRIDE=""
+REWATCH_SUPPRESSED=0
+HANDOFF_AWAITING_RESIDENT=0
+NO_OTHER_WORK=0
+PASSIVE_WAIT_LEASE_SECONDS="${SUPERSET_AUTO_PASSIVE_WAIT_LEASE_SECONDS:-2400}"
+RESIDENT_HEARTBEAT_SECONDS="${SUPERSET_AUTO_WORKER_HEARTBEAT_SECONDS:-60}"
+RESIDENT_HEARTBEAT_STALE_SECONDS="${SUPERSET_AUTO_WORKER_HEARTBEAT_STALE_SECONDS:-180}"
+PASSIVE_LEASE_EXPIRED=0
+CALLER_PID="$PPID"
+LAST_RESIDENT_HEARTBEAT=0
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  auto-worker-watch \
+    --workspace <workspace-id> \
+    --terminal <terminal-id> \
+    --handoff <path> \
+    [--label <agent-label>] \
+    [--task <task-id>] \
+    [--state-file <path>] \
+    [--resident] \
+    [--once] \
+    [--hard-dependency-reason <reason>] \
+    [--no-other-work] \
+    [--wait-seconds <seconds>] \
+    [--interval <seconds>] \
+    [--max-lines <lines>]
+
+Modes:
+  foreground (default)
+      Watches the requested worker and also preempts on an unreported urgent
+      FAILED_TERMINAL/SUPERVISION_LOST event from any registered peer worker in
+      the same workspace.
+
+  --resident
+      Dedicated per-worker supervisor. Runs until DONE/FAILED_TERMINAL/
+      SUPERVISION_LOST, publishes state atomically, and ignores peer events.
+      On a valid DONE/BLOCKED handoff it automatically closes the exact worker
+      terminal before publishing final DONE state. --wait-seconds is forced to
+      0 (unbounded resident lifetime).
+
+Exit codes:
+  0   DONE — valid handoff exists
+  75  FAILED_TERMINAL — authoritative hard quota/usage failure
+  76  SUPERVISION_LOST — terminal is no longer readable/active
+  79  RUNNING — bounded foreground collection ended; resident supervision continues; yield to scheduler
+  64  usage/configuration error
+
+Important:
+  JSON output contains both `requestedTerminalId` and `terminalId`. When
+  `concurrentEvent` is true, the urgent event belongs to a DIFFERENT worker and
+  the coordinator must handle that worker before resuming its prior wait.
+
+  Automatic close is resident-only and defaults ON. Set
+  SUPERSET_AUTO_CLOSE_COMPLETED_WORKERS=0 to disable it for diagnostics.
+  FAILED_TERMINAL and SUPERVISION_LOST terminals are never auto-closed here.
+
+  Foreground RUNNING/79 creates a same-terminal re-watch interlock. A later
+  foreground watch for that terminal is suppressed unless scheduler progress
+  (a successful new auto-dispatch in the workspace) cleared the interlock, or
+  the caller explicitly supplies --hard-dependency-reason or --no-other-work.
+
+  --no-other-work is NOT a polling override. In foreground mode it converts the
+  watch into a host-safe passive event wait. The runtime uses a bounded passive
+  lease (default 2400 seconds, configurable with
+  SUPERSET_AUTO_PASSIVE_WAIT_LEASE_SECONDS) so the watcher returns control
+  before Superset's shell executor can forcibly terminate a long-running tool
+  call. DONE, FAILED_TERMINAL, SUPERVISION_LOST, and urgent peer events still
+  return immediately. Lease expiry returns RUNNING/79 with
+  passiveLeaseExpired=true; if no useful independent work exists, the
+  coordinator may renew exactly one passive lease. This is lease renewal, not
+  a polling loop.
+USAGE
+}
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 64
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --workspace)
+      (( $# >= 2 )) || die "--workspace requires a value"
+      WORKSPACE="$2"
+      shift 2
+      ;;
+    --terminal)
+      (( $# >= 2 )) || die "--terminal requires a value"
+      TERMINAL_ID="$2"
+      shift 2
+      ;;
+    --handoff)
+      (( $# >= 2 )) || die "--handoff requires a value"
+      HANDOFF="$2"
+      shift 2
+      ;;
+    --label)
+      (( $# >= 2 )) || die "--label requires a value"
+      LABEL="$2"
+      shift 2
+      ;;
+    --task)
+      (( $# >= 2 )) || die "--task requires a value"
+      TASK="$2"
+      shift 2
+      ;;
+    --state-file)
+      (( $# >= 2 )) || die "--state-file requires a value"
+      STATE_FILE="$2"
+      shift 2
+      ;;
+    --max-lines)
+      (( $# >= 2 )) || die "--max-lines requires a value"
+      MAX_LINES="$2"
+      shift 2
+      ;;
+    --interval)
+      (( $# >= 2 )) || die "--interval requires a value"
+      INTERVAL="$2"
+      shift 2
+      ;;
+    --wait-seconds)
+      (( $# >= 2 )) || die "--wait-seconds requires a value"
+      WAIT_SECONDS="$2"
+      shift 2
+      ;;
+    --once)
+      ONCE=1
+      shift
+      ;;
+    --resident)
+      RESIDENT=1
+      WAIT_SECONDS=0
+      shift
+      ;;
+    --hard-dependency-reason)
+      (( $# >= 2 )) || die "--hard-dependency-reason requires a value"
+      [[ -n "$2" ]] || die "--hard-dependency-reason must not be empty"
+      REWATCH_OVERRIDE="HARD_DEPENDENCY: $2"
+      shift 2
+      ;;
+    --no-other-work)
+      REWATCH_OVERRIDE="NO_OTHER_USEFUL_WORK"
+      NO_OTHER_WORK=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+done
+
+[[ -n "$WORKSPACE" ]] || die "--workspace is required"
+[[ -n "$TERMINAL_ID" ]] || die "--terminal is required"
+[[ -n "$HANDOFF" ]] || die "--handoff is required"
+
+is_uint() {
+  [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+is_uint "$MAX_LINES" || die "--max-lines must be an integer"
+is_uint "$INTERVAL" || die "--interval must be an integer"
+is_uint "$WAIT_SECONDS" || die "--wait-seconds must be an integer"
+is_uint "$PEER_EVENT_MAX_AGE" || die "SUPERSET_AUTO_WORKER_PEER_EVENT_MAX_AGE must be an integer"
+is_uint "$PASSIVE_WAIT_LEASE_SECONDS" || die "SUPERSET_AUTO_PASSIVE_WAIT_LEASE_SECONDS must be an integer"
+is_uint "$RESIDENT_HEARTBEAT_SECONDS" || die "SUPERSET_AUTO_WORKER_HEARTBEAT_SECONDS must be an integer"
+is_uint "$RESIDENT_HEARTBEAT_STALE_SECONDS" || die "SUPERSET_AUTO_WORKER_HEARTBEAT_STALE_SECONDS must be an integer"
+[[ "$AUTO_CLOSE_COMPLETED" == "0" || "$AUTO_CLOSE_COMPLETED" == "1" ]] || die "SUPERSET_AUTO_CLOSE_COMPLETED_WORKERS must be 0 or 1"
+(( INTERVAL >= 1 )) || die "--interval must be >= 1"
+(( PASSIVE_WAIT_LEASE_SECONDS >= 1 )) || die "SUPERSET_AUTO_PASSIVE_WAIT_LEASE_SECONDS must be >= 1"
+(( RESIDENT_HEARTBEAT_SECONDS >= 1 )) || die "SUPERSET_AUTO_WORKER_HEARTBEAT_SECONDS must be >= 1"
+(( RESIDENT_HEARTBEAT_STALE_SECONDS > RESIDENT_HEARTBEAT_SECONDS )) || die "SUPERSET_AUTO_WORKER_HEARTBEAT_STALE_SECONDS must exceed heartbeat seconds"
+
+# v9.8.21: Superset's shell executor has a finite wall-clock lifetime. An
+# actually-unbounded foreground tool call can therefore be killed externally,
+# stranding the coordinator and potentially leaving orphaned foreground watcher
+# processes. Convert --no-other-work into a long but host-safe passive lease.
+# The detached resident watcher remains the authoritative unbounded supervisor.
+if (( RESIDENT == 0 && NO_OTHER_WORK == 1 && ONCE == 0 )); then
+  WAIT_SECONDS="$PASSIVE_WAIT_LEASE_SECONDS"
+fi
+
+# Foreground collectors are children of a model tool shell. If that shell is
+# killed by the host, the collector must not linger as an orphan. Resident
+# watchers are intentionally detached and are excluded.
+if (( RESIDENT == 0 )); then
+  trap 'exit 79' HUP TERM
+fi
+
+command -v superset >/dev/null 2>&1 || die "superset is required"
+command -v jq >/dev/null 2>&1 || die "jq is required"
+
+REGISTRY_DIR="$REGISTRY_ROOT/$WORKSPACE"
+mkdir -p "$REGISTRY_DIR" || die "unable to create worker registry: $REGISTRY_DIR"
+FOREGROUND_YIELD_DIR="$REGISTRY_DIR/.foreground-yields"
+FOREGROUND_YIELD_FILE="$FOREGROUND_YIELD_DIR/$TERMINAL_ID.json"
+mkdir -p "$FOREGROUND_YIELD_DIR" || die "unable to create foreground-yield registry: $FOREGROUND_YIELD_DIR"
+
+if [[ -z "$STATE_FILE" ]]; then
+  STATE_FILE="$REGISTRY_DIR/$TERMINAL_ID.json"
+fi
+STATE_DIR="$(dirname "$STATE_FILE")"
+mkdir -p "$STATE_DIR" || die "unable to create state-file directory: $STATE_DIR"
+
+# Foreground event collectors are often called with only workspace/terminal/handoff.
+# Hydrate human/scheduler metadata from the resident registry so RUNNING/FAILED
+# output retains the exact agent label and task identity instead of null values.
+if (( RESIDENT == 0 )) && [[ -s "$STATE_FILE" ]]; then
+  if [[ -z "$LABEL" ]]; then
+    LABEL="$(jq -r '.agentLabel // empty' "$STATE_FILE" 2>/dev/null || true)"
+  fi
+  if [[ -z "$TASK" ]]; then
+    TASK="$(jq -r '.task // empty' "$STATE_FILE" 2>/dev/null || true)"
+  fi
+fi
+
+iso_now() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+epoch_now() {
+  date '+%s'
+}
+
+render_json() {
+  local state="$1"
+  local failure_class="$2"
+  local evidence="$3"
+  local actual_terminal="$4"
+  local actual_handoff="$5"
+  local actual_label="$6"
+  local actual_task="$7"
+  local concurrent="$8"
+  local updated_at="$9"
+  local updated_epoch="${10}"
+
+  local emitter_mode="foreground"
+  (( RESIDENT == 1 )) && emitter_mode="resident"
+
+  jq -n \
+    --arg state "$state" \
+    --arg failureClass "$failure_class" \
+    --arg workspaceId "$WORKSPACE" \
+    --arg requestedTerminalId "$TERMINAL_ID" \
+    --arg terminalId "$actual_terminal" \
+    --arg handoff "$actual_handoff" \
+    --arg agentLabel "$actual_label" \
+    --arg task "$actual_task" \
+    --arg evidence "$evidence" \
+    --arg updatedAt "$updated_at" \
+    --arg terminalClosedAt "$TERMINAL_CLOSED_AT" \
+    --arg terminalCloseError "$TERMINAL_CLOSE_ERROR" \
+    --arg terminalCloseSkippedReason "$TERMINAL_CLOSE_SKIPPED_REASON" \
+    --arg emitterMode "$emitter_mode" \
+    --arg rewatchOverride "$REWATCH_OVERRIDE" \
+    --argjson updatedEpoch "$updated_epoch" \
+    --argjson supervisorPid "$$" \
+    --argjson concurrentEvent "$concurrent" \
+    --argjson terminalCloseAttempted "$TERMINAL_CLOSE_ATTEMPTED" \
+    --argjson terminalClosed "$TERMINAL_CLOSED" \
+    --argjson rewatchSuppressed "$REWATCH_SUPPRESSED" \
+    --argjson handoffAwaitingResident "$HANDOFF_AWAITING_RESIDENT" \
+    --argjson passiveWait "$NO_OTHER_WORK" \
+    --argjson passiveLeaseExpired "$PASSIVE_LEASE_EXPIRED" \
+    --argjson passiveWaitLeaseSeconds "$PASSIVE_WAIT_LEASE_SECONDS" \
+    '{
+      state: $state,
+      failureClass: (if $failureClass == "" then null else $failureClass end),
+      workspaceId: $workspaceId,
+      requestedTerminalId: $requestedTerminalId,
+      terminalId: $terminalId,
+      handoff: $handoff,
+      agentLabel: (if $agentLabel == "" then null else $agentLabel end),
+      task: (if $task == "" then null else $task end),
+      evidence: (if $evidence == "" then null else $evidence end),
+      terminalCloseAttempted: ($terminalCloseAttempted == 1),
+      terminalClosed: ($terminalClosed == 1),
+      terminalClosedAt: (if $terminalClosedAt == "" then null else $terminalClosedAt end),
+      terminalCloseError: (if $terminalCloseError == "" then null else $terminalCloseError end),
+      terminalCloseSkippedReason: (if $terminalCloseSkippedReason == "" then null else $terminalCloseSkippedReason end),
+      emitterMode: $emitterMode,
+      rewatchSuppressed: ($rewatchSuppressed == 1),
+      rewatchOverride: (if $rewatchOverride == "" then null else $rewatchOverride end),
+      handoffAwaitingResident: ($handoffAwaitingResident == 1),
+      passiveWait: ($passiveWait == 1),
+      passiveLeaseExpired: ($passiveLeaseExpired == 1),
+      passiveWaitLeaseSeconds: $passiveWaitLeaseSeconds,
+      updatedAt: $updatedAt,
+      updatedEpoch: $updatedEpoch,
+      supervisorPid: $supervisorPid,
+      concurrentEvent: $concurrentEvent,
+      schedulerDirective: (
+        if $state == "RUNNING" and ($passiveLeaseExpired == 1) then
+          "PASSIVE_WAIT_LEASE_EXPIRED: host-safe passive lease ended before the Superset shell timeout. If no useful independent work is schedulable and resident supervision is healthy, renew one --no-other-work passive lease. This is lease renewal, not a polling loop."
+        elif $state == "RUNNING" and ($handoffAwaitingResident == 1) then
+          "AWAIT_RESIDENT_FINALIZATION: durable handoff exists; resident watcher must own terminal cleanup and final registry publication before the coordinator collects/removes the handoff"
+        elif $state == "RUNNING" and ($rewatchSuppressed == 1) then
+          "REWATCH_SUPPRESSED: same-terminal foreground watch is interlocked after RUNNING/79; schedule other useful work or pass an explicit hard-dependency/no-other-work override"
+        elif $state == "RUNNING" then
+          "YIELD_TO_SCHEDULER: resident supervision continues; do not immediately re-watch this terminal while other useful independent work is schedulable; re-watch only for a hard dependency or when no other useful work exists"
+        elif $state == "DONE" then
+          "COLLECT_HANDOFF_AND_ADVANCE"
+        elif $state == "FAILED_TERMINAL" then
+          "RECOVER_FAILED_WORKER_NOW"
+        elif $state == "SUPERVISION_LOST" then
+          "ACTIVATE_DO_NOT_POLL_AND_RECOVER_SUPERVISION"
+        else null end
+      )
+    }'
+}
+
+atomic_publish_state() {
+  # The resident watcher is the sole authoritative registry writer. Foreground
+  # event collectors may emit observations, but must never overwrite resident
+  # cleanup/failure audit fields.
+  (( RESIDENT == 1 )) || return 0
+
+  local state="$1"
+  local failure_class="$2"
+  local evidence="$3"
+  local updated_at updated_epoch tmp
+  updated_at="$(iso_now)"
+  updated_epoch="$(epoch_now)"
+  tmp="${STATE_FILE}.tmp.$$.$RANDOM"
+
+  render_json "$state" "$failure_class" "$evidence" "$TERMINAL_ID" "$HANDOFF" "$LABEL" "$TASK" false "$updated_at" "$updated_epoch" > "$tmp" || {
+    rm -f "$tmp"
+    return 1
+  }
+  mv -f "$tmp" "$STATE_FILE"
+}
+
+emit_current() {
+  local state="$1"
+  local failure_class="$2"
+  local evidence="$3"
+  render_json "$state" "$failure_class" "$evidence" "$TERMINAL_ID" "$HANDOFF" "$LABEL" "$TASK" false "$(iso_now)" "$(epoch_now)"
+}
+
+handoff_complete() {
+  [[ -s "$HANDOFF" ]] || return 1
+  grep -q 'SUPERSET_WORKER_DONE' "$HANDOFF" 2>/dev/null
+}
+
+clear_foreground_yield() {
+  rm -f "$FOREGROUND_YIELD_FILE" 2>/dev/null || true
+}
+
+record_foreground_yield() {
+  (( RESIDENT == 0 )) || return 0
+  local tmp now_iso now_epoch
+  now_iso="$(iso_now)"
+  now_epoch="$(epoch_now)"
+  tmp="${FOREGROUND_YIELD_FILE}.tmp.$$.$RANDOM"
+  jq -n \
+    --arg workspaceId "$WORKSPACE" \
+    --arg terminalId "$TERMINAL_ID" \
+    --arg handoff "$HANDOFF" \
+    --arg yieldedAt "$now_iso" \
+    --argjson yieldedEpoch "$now_epoch" \
+    '{workspaceId:$workspaceId,terminalId:$terminalId,handoff:$handoff,yieldedAt:$yieldedAt,yieldedEpoch:$yieldedEpoch}' \
+    > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$FOREGROUND_YIELD_FILE"
+}
+
+rewatch_interlocked() {
+  (( RESIDENT == 0 )) || return 1
+  [[ -z "$REWATCH_OVERRIDE" ]] || return 1
+  [[ -s "$FOREGROUND_YIELD_FILE" ]]
+}
+
+emit_registered_final_if_any() {
+  (( RESIDENT == 0 )) || return 1
+  [[ -s "$STATE_FILE" ]] || return 1
+  local state
+  state="$(jq -r '.state // empty' "$STATE_FILE" 2>/dev/null || true)"
+  case "$state" in
+    DONE)
+      cat "$STATE_FILE"
+      return 0
+      ;;
+    FAILED_TERMINAL)
+      cat "$STATE_FILE"
+      return 75
+      ;;
+    SUPERVISION_LOST)
+      cat "$STATE_FILE"
+      return 76
+      ;;
+  esac
+  return 1
+}
+
+resident_heartbeat_stale() {
+  (( RESIDENT == 0 )) || return 1
+  [[ -s "$STATE_FILE" ]] || return 1
+  local state updated now age
+  state="$(jq -r '.state // empty' "$STATE_FILE" 2>/dev/null || true)"
+  [[ "$state" == "RUNNING" ]] || return 1
+  updated="$(jq -r '.updatedEpoch // 0' "$STATE_FILE" 2>/dev/null || true)"
+  is_uint "$updated" || updated=0
+  (( updated > 0 )) || return 1
+  now="$(epoch_now)"
+  age=$(( now - updated ))
+  (( age > RESIDENT_HEARTBEAT_STALE_SECONDS ))
+}
+
+close_completed_terminal() {
+  # Cleanup is deliberately resident-only. Foreground watchers may race the
+  # resident watcher when they observe the same handoff, and must never issue a
+  # duplicate close. A valid handoff is already durable, so close failure does
+  # not invalidate worker completion; it is recorded for coordinator audit.
+  (( RESIDENT == 1 )) || return 0
+  if [[ "$AUTO_CLOSE_COMPLETED" != "1" ]]; then
+    TERMINAL_CLOSE_SKIPPED_REASON="disabled by SUPERSET_AUTO_CLOSE_COMPLETED_WORKERS=0"
+    return 0
+  fi
+  (( TERMINAL_CLOSE_ATTEMPTED == 0 )) || return 0
+
+  TERMINAL_CLOSE_ATTEMPTED=1
+
+  local out err rc
+  out="$(mktemp -t superset-worker-close.out.XXXXXX)" || {
+    TERMINAL_CLOSE_ERROR="unable to create terminal-close stdout capture"
+    return 0
+  }
+  err="$(mktemp -t superset-worker-close.err.XXXXXX)" || {
+    rm -f "$out"
+    TERMINAL_CLOSE_ERROR="unable to create terminal-close stderr capture"
+    return 0
+  }
+
+  if superset terminals close \
+      --workspace "$WORKSPACE" \
+      --terminal "$TERMINAL_ID" \
+      --json >"$out" 2>"$err"
+  then
+    TERMINAL_CLOSED=1
+    TERMINAL_CLOSED_AT="$(iso_now)"
+    TERMINAL_CLOSE_ERROR=""
+    TERMINAL_CLOSE_SKIPPED_REASON=""
+  else
+    rc=$?
+    TERMINAL_CLOSED=0
+    TERMINAL_CLOSE_ERROR="$(cat "$err" 2>/dev/null || true)"
+    if [[ -z "$TERMINAL_CLOSE_ERROR" ]]; then
+      TERMINAL_CLOSE_ERROR="superset terminals close exited $rc"
+    fi
+  fi
+
+  rm -f "$out" "$err"
+  return 0
+}
+
+hard_quota_evidence() {
+  local text="$1"
+
+  # Match authoritative terminal quota screens, not generic/transient 429 text.
+  # Claude Code 2.1.263 emits "You've hit your session limit"; that line alone
+  # is terminal evidence and must not wait for the optional /upgrade line.
+  printf '%s\n' "$text" |
+    grep -Ei \
+      "you.?ve hit your session limit|you.?ve hit your usage limit|you.?ve hit your limit|/upgrade to increase your usage limit|FreeUsageLimitError|free_tier_limit|Free usage exceeded|weekly usage limit|usage limit (reached|exceeded)|usage limit.*resets" |
+    tail -n 6
+}
+
+provider_busy_evidence() {
+  local text="$1"
+  local tail_text
+  tail_text="$(printf '%s\n' "$text" | tail -n 30)"
+
+  # Cursor can leave an interactive terminal alive after rejecting the request
+  # because the selected model is overloaded. Require the paired Cursor
+  # high-load wording near the terminal tail so quoted policy/prompt text does
+  # not accidentally trip this matcher.
+  if printf '%s\n' "$tail_text" | grep -Fqi "Error: High Load" &&
+     printf '%s\n' "$tail_text" | grep -Eqi "experiencing high demand for Cursor"; then
+    printf '%s\n' "$tail_text" |
+      grep -Ei "Error: High Load|experiencing high demand for Cursor|Please switch to Auto, another model, or try again" |
+      tail -n 4
+    return 0
+  fi
+  return 1
+}
+
+model_unavailable_evidence() {
+  local text="$1"
+  local tail_text
+  tail_text="$(printf '%s\n' "$text" | tail -n 24)"
+
+  # Cursor's model-rejection screen is terminal for the delegated worker even
+  # though the TUI itself remains readable/resident.
+  if printf '%s\n' "$tail_text" | grep -Eqi "^Cannot use this model:|^Error:.*model.*(unavailable|not available|unsupported)"; then
+    printf '%s\n' "$tail_text" |
+      grep -Ei "^Cannot use this model:|^Error:.*model.*(unavailable|not available|unsupported)" |
+      tail -n 4
+    return 0
+  fi
+  return 1
+}
+
+# Claim one urgent peer event exactly once for foreground coordinator recovery.
+# Resident supervisors never consume peer events; they only publish their own.
+peer_urgent_event() {
+  (( RESIDENT == 0 )) || return 1
+  # Guard: an empty registry must mean "no peer events", not a fatal glob
+  # error that aborts supervision with an undocumented exit code.
+  setopt localoptions nullglob
+
+  local now file state failure actual_terminal updated_epoch age claim payload
+  local -a peer_files
+  now="$(epoch_now)"
+
+  # zsh raises NOMATCH when a glob has no matches. Foreground collection must
+  # remain valid even before any resident registry JSON exists, so explicitly
+  # request a null glob here instead of letting an empty workspace abort the
+  # watcher.
+  peer_files=("$REGISTRY_DIR"/*.json(N))
+  for file in "${peer_files[@]}"; do
+    [[ "$file" == "$STATE_FILE" ]] && continue
+
+    state="$(jq -r '.state // empty' "$file" 2>/dev/null || true)"
+    case "$state" in
+      FAILED_TERMINAL|SUPERVISION_LOST) ;;
+      *) continue ;;
+    esac
+
+    actual_terminal="$(jq -r '.terminalId // empty' "$file" 2>/dev/null || true)"
+    [[ -n "$actual_terminal" ]] || continue
+    [[ "$actual_terminal" != "$TERMINAL_ID" ]] || continue
+
+    updated_epoch="$(jq -r '.updatedEpoch // 0' "$file" 2>/dev/null || true)"
+    is_uint "$updated_epoch" || updated_epoch=0
+    age=$(( now - updated_epoch ))
+    (( age >= 0 && age <= PEER_EVENT_MAX_AGE )) || continue
+
+    # mkdir is atomic and prevents the same peer terminal event from repeatedly
+    # breaking every subsequent foreground wait.
+    claim="${file}.reported"
+    if mkdir "$claim" 2>/dev/null; then
+      payload="$(jq \
+        --arg requestedTerminalId "$TERMINAL_ID" \
+        '.requestedTerminalId = $requestedTerminalId | .concurrentEvent = true' \
+        "$file" 2>/dev/null || true)"
+      if [[ -n "$payload" ]]; then
+        printf '%s\n' "$payload"
+        if [[ "$state" == "FAILED_TERMINAL" ]]; then
+          return 75
+        fi
+        return 76
+      fi
+      rmdir "$claim" 2>/dev/null || true
+    fi
+  done
+
+  return 1
+}
+
+# Before any foreground terminal read, honor a prior RUNNING/79 yield. The
+# durable handoff or resident terminal state wins, but otherwise a consecutive
+# same-terminal foreground re-watch is rejected mechanically unless an explicit
+# override was provided. This prevents policy-noncompliant 60-second rewatch
+# starvation loops.
+if (( RESIDENT == 0 )); then
+  REGISTERED_OUT="$(mktemp -t superset-worker-registered.XXXXXX)"
+  emit_registered_final_if_any > "$REGISTERED_OUT"
+  REGISTERED_RC=$?
+  if (( REGISTERED_RC == 0 || REGISTERED_RC == 75 || REGISTERED_RC == 76 )); then
+    clear_foreground_yield
+    cat "$REGISTERED_OUT"
+    rm -f "$REGISTERED_OUT"
+    exit "$REGISTERED_RC"
+  fi
+  rm -f "$REGISTERED_OUT"
+
+  if handoff_complete; then
+    # Never let a foreground collector race the resident cleanup path by
+    # returning raw handoff DONE first. Keep the handoff durable until the
+    # resident watcher has closed/audited the terminal and published DONE.
+    HANDOFF_AWAITING_RESIDENT=1
+  elif rewatch_interlocked; then
+    REWATCH_SUPPRESSED=1
+    emit_current "RUNNING" "" "consecutive same-terminal foreground re-watch suppressed after prior RUNNING/79; resident supervision continues"
+    exit 79
+  fi
+fi
+
+# A resident supervisor advertises liveness once. Foreground watchers do not
+# overwrite a resident terminal state with repeated RUNNING updates.
+if (( RESIDENT == 1 )); then
+  atomic_publish_state "RUNNING" "" "resident supervisor active" || die "unable to publish resident state"
+  LAST_RESIDENT_HEARTBEAT="$(epoch_now)"
+fi
+
+started="$(epoch_now)"
+
+while true; do
+  # A foreground collector must never survive the model tool shell that invoked
+  # it. This catches host-side tool termination even when no signal reaches the
+  # nested watcher process.
+  if (( RESIDENT == 0 )); then
+    if ! kill -0 "$CALLER_PID" 2>/dev/null; then
+      exit 79
+    fi
+    if resident_heartbeat_stale; then
+      clear_foreground_yield
+      emit_current "SUPERVISION_LOST" "RESIDENT_HEARTBEAT_STALE" "resident watcher heartbeat exceeded ${RESIDENT_HEARTBEAT_STALE_SECONDS}s; recover supervision before waiting again"
+      exit 76
+    fi
+  fi
+
+  # The atomic sidecar wins over every terminal/fatal state.
+  if handoff_complete; then
+    if (( RESIDENT == 1 )); then
+      clear_foreground_yield
+      close_completed_terminal
+      atomic_publish_state "DONE" "" "valid SUPERSET_WORKER_DONE handoff present" || true
+      emit_current "DONE" "" "valid SUPERSET_WORKER_DONE handoff present"
+      exit 0
+    fi
+
+    # Foreground collectors wait for the resident's authoritative DONE rather
+    # than publishing completion themselves. This prevents the coordinator from
+    # deleting the handoff before terminal cleanup has been attempted/audited.
+    REGISTERED_OUT="$(mktemp -t superset-worker-registered.XXXXXX)"
+    emit_registered_final_if_any > "$REGISTERED_OUT"
+    REGISTERED_RC=$?
+    if (( REGISTERED_RC == 0 || REGISTERED_RC == 75 || REGISTERED_RC == 76 )); then
+      clear_foreground_yield
+      cat "$REGISTERED_OUT"
+      rm -f "$REGISTERED_OUT"
+      exit "$REGISTERED_RC"
+    fi
+    rm -f "$REGISTERED_OUT"
+
+    HANDOFF_AWAITING_RESIDENT=1
+    if (( ONCE == 1 )); then
+      emit_current "RUNNING" "" "durable handoff present; awaiting resident terminal cleanup and authoritative DONE publication"
+      exit 79
+    fi
+    if (( WAIT_SECONDS > 0 )); then
+      now="$(epoch_now)"
+      elapsed=$(( now - started ))
+      if (( elapsed >= WAIT_SECONDS )); then
+        if (( NO_OTHER_WORK == 1 )); then
+          PASSIVE_LEASE_EXPIRED=1
+          emit_current "RUNNING" "" "durable handoff present; host-safe passive lease ended while awaiting resident cleanup/DONE publication"
+        else
+          emit_current "RUNNING" "" "durable handoff present; bounded collector ended while awaiting resident cleanup/DONE publication"
+        fi
+        exit 79
+      fi
+    fi
+    sleep 1
+    continue
+  fi
+
+  # While foreground-waiting on one worker, an urgent event from another
+  # registered worker must regain coordinator control immediately.
+  if (( RESIDENT == 0 )); then
+    PEER_OUT="$(mktemp -t superset-worker-peer.XXXXXX)"
+    peer_urgent_event > "$PEER_OUT"
+    PEER_RC=$?
+    if (( PEER_RC == 75 || PEER_RC == 76 )); then
+      cat "$PEER_OUT"
+      rm -f "$PEER_OUT"
+      exit "$PEER_RC"
+    fi
+    rm -f "$PEER_OUT"
+  fi
+
+  OUT="$(mktemp -t superset-worker-watch.out.XXXXXX)"
+  ERR="$(mktemp -t superset-worker-watch.err.XXXXXX)"
+
+  if superset terminals read \
+      --workspace "$WORKSPACE" \
+      --terminal "$TERMINAL_ID" \
+      --max-lines "$MAX_LINES" \
+      --json >"$OUT" 2>"$ERR"
+  then
+    TEXT="$(jq -r '.text // ""' "$OUT" 2>/dev/null || true)"
+
+    # Superset can leave a quota-dead interactive terminal marked live.
+    # Therefore authoritative fatal text is checked BEFORE liveness.
+    QUOTA="$(hard_quota_evidence "$TEXT" || true)"
+    PROVIDER_BUSY="$(provider_busy_evidence "$TEXT" || true)"
+    MODEL_UNAVAILABLE="$(model_unavailable_evidence "$TEXT" || true)"
+
+    rm -f "$OUT" "$ERR"
+
+    if [[ -n "$QUOTA" ]]; then
+      # One final sidecar check closes the race where completion and fatal text
+      # become visible at nearly the same moment.
+      if handoff_complete; then
+        if (( RESIDENT == 1 )); then
+          clear_foreground_yield
+          close_completed_terminal
+          atomic_publish_state "DONE" "" "valid handoff appeared during final quota check" || true
+          emit_current "DONE" "" "valid handoff appeared during final quota check"
+          exit 0
+        fi
+        HANDOFF_AWAITING_RESIDENT=1
+        sleep 1
+        continue
+      fi
+
+      clear_foreground_yield
+      atomic_publish_state "FAILED_TERMINAL" "WORKER_QUOTA_TERMINATED" "$QUOTA" || true
+      emit_current "FAILED_TERMINAL" "WORKER_QUOTA_TERMINATED" "$QUOTA"
+      exit 75
+    fi
+
+    if [[ -n "$PROVIDER_BUSY" ]]; then
+      if handoff_complete; then
+        if (( RESIDENT == 1 )); then
+          clear_foreground_yield
+          close_completed_terminal
+          atomic_publish_state "DONE" "" "valid handoff appeared during final provider-busy check" || true
+          emit_current "DONE" "" "valid handoff appeared during final provider-busy check"
+          exit 0
+        fi
+        HANDOFF_AWAITING_RESIDENT=1
+        sleep 1
+        continue
+      fi
+
+      clear_foreground_yield
+      atomic_publish_state "FAILED_TERMINAL" "WORKER_PROVIDER_BUSY" "$PROVIDER_BUSY" || true
+      emit_current "FAILED_TERMINAL" "WORKER_PROVIDER_BUSY" "$PROVIDER_BUSY"
+      exit 75
+    fi
+
+    if [[ -n "$MODEL_UNAVAILABLE" ]]; then
+      if handoff_complete; then
+        if (( RESIDENT == 1 )); then
+          clear_foreground_yield
+          close_completed_terminal
+          atomic_publish_state "DONE" "" "valid handoff appeared during final model-unavailable check" || true
+          emit_current "DONE" "" "valid handoff appeared during final model-unavailable check"
+          exit 0
+        fi
+        HANDOFF_AWAITING_RESIDENT=1
+        sleep 1
+        continue
+      fi
+
+      clear_foreground_yield
+      atomic_publish_state "FAILED_TERMINAL" "WORKER_MODEL_UNAVAILABLE" "$MODEL_UNAVAILABLE" || true
+      emit_current "FAILED_TERMINAL" "WORKER_MODEL_UNAVAILABLE" "$MODEL_UNAVAILABLE"
+      exit 75
+    fi
+  else
+    READ_ERR="$(cat "$ERR" 2>/dev/null || true)"
+    rm -f "$OUT" "$ERR"
+
+    if handoff_complete; then
+      if (( RESIDENT == 1 )); then
+        # The durable handoff wins, but the terminal is already unreadable. Do
+        # not issue a close against a now-unreadable/disposed UUID.
+        clear_foreground_yield
+        TERMINAL_CLOSE_SKIPPED_REASON="terminal unreadable before resident cleanup"
+        atomic_publish_state "DONE" "" "valid handoff present after terminal became unreadable; auto-close skipped" || true
+        emit_current "DONE" "" "valid handoff present after terminal became unreadable; auto-close skipped"
+        exit 0
+      fi
+      HANDOFF_AWAITING_RESIDENT=1
+      sleep 1
+      continue
+    fi
+
+    clear_foreground_yield
+    atomic_publish_state "SUPERVISION_LOST" "TERMINAL_NOT_ACTIVE" "$READ_ERR" || true
+    emit_current "SUPERVISION_LOST" "TERMINAL_NOT_ACTIVE" "$READ_ERR"
+    exit 76
+  fi
+
+  if (( RESIDENT == 1 )); then
+    now="$(epoch_now)"
+    if (( now - LAST_RESIDENT_HEARTBEAT >= RESIDENT_HEARTBEAT_SECONDS )); then
+      atomic_publish_state "RUNNING" "" "resident heartbeat; terminal readable" || true
+      LAST_RESIDENT_HEARTBEAT="$now"
+    fi
+  fi
+
+  if (( ONCE == 1 )); then
+    record_foreground_yield || true
+    emit_current "RUNNING" "" "terminal readable; resident supervision continues; yield to scheduler unless this worker is a hard dependency and no other useful work is schedulable"
+    exit 79
+  fi
+
+  if (( RESIDENT == 0 && WAIT_SECONDS > 0 )); then
+    now="$(epoch_now)"
+    elapsed=$(( now - started ))
+    if (( elapsed >= WAIT_SECONDS )); then
+      if (( NO_OTHER_WORK == 1 )); then
+        PASSIVE_LEASE_EXPIRED=1
+        emit_current "RUNNING" "" "host-safe passive wait lease ended; worker remains readable and resident supervision continues"
+      else
+        record_foreground_yield || true
+        emit_current "RUNNING" "" "bounded foreground collection ended; worker remains readable and resident supervision continues; yield to scheduler instead of immediately re-watching when other useful work is schedulable"
+      fi
+      exit 79
+    fi
+  fi
+
+  sleep "$INTERVAL"
+done

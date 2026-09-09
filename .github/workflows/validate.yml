@@ -1,0 +1,23 @@
+name: Validate public package
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  validate:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install shell check dependency
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh jq
+      - run: python3 -B scripts/validate.py
+      - run: python3 scripts/scan_public.py --tracked

@@ -1,0 +1,24 @@
+#!/bin/bash
+# SUPERSET_CODEX_QUOTA_AUTO_CODEX_V981
+set -u
+REAL="$HOME/.superset/bin/auto-codex.real-v9.8.1"
+GATE="${HOME}/.superset/bin/auto-codex-quota-gate"
+
+# Non-inference diagnostics must continue to work even when quota is closed.
+BYPASS=0
+for ARG in "$@"; do
+  case "$ARG" in
+    --version|-V|version|--help|-h|help)
+      BYPASS=1
+      ;;
+  esac
+done
+
+if (( ! BYPASS )); then
+  if ! "$GATE" --quiet; then
+    "$GATE" >&2 || true
+    exit 75
+  fi
+fi
+
+exec "$REAL" "$@"

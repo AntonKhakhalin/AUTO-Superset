@@ -1,0 +1,117 @@
+#!/bin/bash
+# SUPERSET_AUTO_NATIVE_LAUNCH_V990
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  auto-dispatch.real-v9.9.0 \
+    --workspace <workspace-id> \
+    --label <logical-route-or-agent-label> \
+    (--prompt <text> | --prompt-file <path>) \
+    [--model <superset-model-id>] [--effort <level>] [--host <host-id>]
+USAGE
+}
+
+die() { echo "ERROR: $*" >&2; exit 64; }
+
+workspace=""
+label=""
+prompt=""
+prompt_file=""
+host=""
+model=""
+effort=""
+
+while (( $# > 0 )); do
+  case "$1" in
+    --workspace) (( $# >= 2 )) || die "--workspace requires a value"; workspace="$2"; shift 2 ;;
+    --label) (( $# >= 2 )) || die "--label requires a value"; label="$2"; shift 2 ;;
+    --prompt) (( $# >= 2 )) || die "--prompt requires a value"; prompt="$2"; shift 2 ;;
+    --prompt-file) (( $# >= 2 )) || die "--prompt-file requires a value"; prompt_file="$2"; shift 2 ;;
+    --host) (( $# >= 2 )) || die "--host requires a value"; host="$2"; shift 2 ;;
+    --model) (( $# >= 2 )) || die "--model requires a value"; model="$2"; shift 2 ;;
+    --effort) (( $# >= 2 )) || die "--effort requires a value"; effort="$2"; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+[[ -n "$workspace" ]] || die "--workspace is required"
+[[ -n "$label" ]] || die "--label is required"
+[[ -n "$prompt" && -n "$prompt_file" ]] && die "use exactly one of --prompt or --prompt-file"
+[[ -z "$prompt" && -z "$prompt_file" ]] && die "one of --prompt or --prompt-file is required"
+command -v jq >/dev/null 2>&1 || die "jq is required"
+
+resolver="$HOME/.superset/bin/auto-agent-id"
+[[ -x "$resolver" ]] || die "guarded resolver is missing or not executable: $resolver"
+
+if [[ -n "$prompt_file" ]]; then
+  [[ -f "$prompt_file" ]] || die "prompt file does not exist: $prompt_file"
+  [[ -r "$prompt_file" ]] || die "prompt file is not readable: $prompt_file"
+  prompt="$(cat "$prompt_file")"
+fi
+[[ -n "$prompt" ]] || die "worker prompt is empty"
+
+agent_id="$("$resolver" "$label")"
+
+if command -v superset >/dev/null 2>&1; then
+  superset_bin="$(command -v superset)"
+elif [[ -x "$HOME/.superset/bin/superset" ]]; then
+  superset_bin="$HOME/.superset/bin/superset"
+else
+  die "Superset CLI not found"
+fi
+
+cmd=("$superset_bin" agents create --workspace "$workspace" --agent "$agent_id")
+[[ -n "$model" ]] && cmd+=(--model "$model")
+[[ -n "$effort" ]] && cmd+=(--effort "$effort")
+cmd+=(--prompt "$prompt" --json)
+[[ -n "$host" ]] && cmd+=(--host "$host")
+
+stderr_file="$(mktemp -t auto-dispatch.XXXXXX)"
+trap 'rm -f "$stderr_file"' EXIT
+
+set +e
+raw="$("${cmd[@]}" 2>"$stderr_file")"
+rc=$?
+set -e
+
+if (( rc != 0 )); then
+  echo "ERROR: Superset child-agent launch failed." >&2
+  [[ -s "$stderr_file" ]] && cat "$stderr_file" >&2
+  [[ -n "$raw" ]] && printf '%s\n' "$raw" >&2
+  exit "$rc"
+fi
+[[ -s "$stderr_file" ]] && cat "$stderr_file" >&2
+
+if ! printf '%s' "$raw" | jq -e . >/dev/null 2>&1; then
+  echo "ERROR: Superset did not return valid JSON." >&2
+  printf '%s\n' "$raw" >&2
+  exit 67
+fi
+
+kind="$(printf '%s' "$raw" | jq -r '.kind // empty')"
+session_id="$(printf '%s' "$raw" | jq -r '.sessionId // empty')"
+[[ -n "$kind" ]] || die "Superset response did not contain .kind"
+[[ -n "$session_id" ]] || die "Superset response did not contain .sessionId"
+
+jq -n \
+  --arg workspaceId "$workspace" \
+  --arg agentLabel "$label" \
+  --arg agentId "$agent_id" \
+  --arg kind "$kind" \
+  --arg sessionId "$session_id" \
+  --arg model "$model" \
+  --arg effort "$effort" \
+  '{
+    ok: true,
+    workspaceId: $workspaceId,
+    agentLabel: $agentLabel,
+    agentId: $agentId,
+    kind: $kind,
+    sessionId: $sessionId,
+    model: (if $model == "" then null else $model end),
+    effort: (if $effort == "" then null else $effort end),
+    terminalId: (if $kind == "terminal" then $sessionId else null end)
+  }'

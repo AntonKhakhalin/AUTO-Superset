@@ -1,0 +1,1062 @@
+#!/usr/bin/env python3
+"""Superset AUTO v9.9.1 workspace-level worker supervisor.
+
+One non-model daemon supervises every AUTO worker in a workspace. Superset
+lifecycle hooks are the preferred signal; terminal reads are an adaptive
+fallback for fatal provider screens and terminals that do not emit enough hook
+state. Durable handoffs remain authoritative.
+"""
+from __future__ import annotations
+
+import argparse
+import contextlib
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import sqlite3
+import subprocess
+import sys
+import time
+from typing import Any, Iterator
+
+MARKER = "SUPERSET_AUTO_WORKSPACE_SUPERVISOR_V991_NATIVE_RESUME"
+VERSION = "9.9.1"
+
+HOME = Path(os.environ.get("SUPERSET_HOME_DIR") or (Path.home() / ".superset"))
+ROOT = Path(os.environ.get("SUPERSET_AUTO_WORKSPACE_SUPERVISOR_ROOT") or (HOME / "auto" / "workspace-supervisor"))
+LEGACY_REGISTRY_ROOT = Path(os.environ.get("SUPERSET_AUTO_WORKER_REGISTRY_ROOT") or (os.environ.get("TMPDIR") or "/tmp")) / "superset-auto-worker-registry"
+SCAN_SECONDS = int(os.environ.get("SUPERSET_AUTO_WORKSPACE_SCAN_SECONDS", "30"))
+SCAN_FRESH_LIFECYCLE_SECONDS = int(os.environ.get("SUPERSET_AUTO_WORKSPACE_SCAN_FRESH_LIFECYCLE_SECONDS", "60"))
+SCAN_NO_HOOK_SECONDS = int(os.environ.get("SUPERSET_AUTO_WORKSPACE_SCAN_NO_HOOK_SECONDS", "15"))
+HOOK_FRESH_SECONDS = int(os.environ.get("SUPERSET_AUTO_WORKSPACE_HOOK_FRESH_SECONDS", "45"))
+RESUME_GRACE_SECONDS = int(os.environ.get("SUPERSET_AUTO_NATIVE_RESUME_GRACE_SECONDS", "30"))
+RESUME_CONFIRM_SECONDS = int(os.environ.get("SUPERSET_AUTO_NATIVE_RESUME_CONFIRM_SECONDS", "30"))
+RESUME_MAX_ATTEMPTS = max(0, int(os.environ.get("SUPERSET_AUTO_NATIVE_RESUME_MAX_ATTEMPTS", "1")))
+RESUME_CONTINUE = os.environ.get("SUPERSET_AUTO_NATIVE_RESUME_CONTINUE", "1") == "1"
+RESUME_CONTINUE_TEXT = os.environ.get(
+    "SUPERSET_AUTO_NATIVE_RESUME_CONTINUE_TEXT",
+    "Continue the current AUTO assignment from where you left off. Preserve existing task-owned work, do not restart completed work, obey the existing worker contract and repository policy, and finish the required durable SUPERSET_WORKER_DONE handoff."
+)
+HEARTBEAT_SECONDS = int(os.environ.get("SUPERSET_AUTO_WORKSPACE_HEARTBEAT_SECONDS", "30"))
+AUTO_CLOSE = os.environ.get("SUPERSET_AUTO_CLOSE_COMPLETED_WORKERS", "1") == "1"
+MAX_LINES = int(os.environ.get("SUPERSET_AUTO_WORKER_RESIDENT_MAX_LINES", "160"))
+
+QUOTA_RE = re.compile(
+    r"you.?ve hit your session limit|you.?ve hit your usage limit|you.?ve hit your limit|"
+    r"/upgrade to increase your usage limit|FreeUsageLimitError|free_tier_limit|Free usage exceeded|"
+    r"weekly usage limit|usage limit (?:reached|exceeded)|usage limit.*resets",
+    re.I,
+)
+MODEL_UNAVAILABLE_RE = re.compile(r"^Cannot use this model:|^Error:.*model.*(?:unavailable|not available|unsupported)", re.I | re.M)
+
+
+def now_epoch() -> int:
+    return int(time.time())
+
+
+def now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def safe_name(value: str) -> str:
+    value = re.sub(r"[^A-Za-z0-9._-]+", "_", value)
+    return value[:180] or "unknown"
+
+
+def ws_dir(workspace: str) -> Path:
+    return ROOT / safe_name(workspace)
+
+
+def registrations_dir(workspace: str) -> Path:
+    return ws_dir(workspace) / "workers"
+
+
+def registration_path(workspace: str, worker_id: str) -> Path:
+    return registrations_dir(workspace) / f"{safe_name(worker_id)}.json"
+
+
+def lifecycle_path(workspace: str) -> Path:
+    return ws_dir(workspace) / "lifecycle.jsonl"
+
+
+def events_path(workspace: str) -> Path:
+    return ws_dir(workspace) / "events.jsonl"
+
+
+def heartbeat_path(workspace: str) -> Path:
+    return ws_dir(workspace) / "heartbeat.json"
+
+
+def pid_path(workspace: str) -> Path:
+    return ws_dir(workspace) / "supervisor.pid"
+
+
+def lock_path(workspace: str) -> Path:
+    return ws_dir(workspace) / ".workspace.lock"
+
+
+def daemon_lock_path(workspace: str) -> Path:
+    return ws_dir(workspace) / ".daemon.lock"
+
+
+def cursor_path(workspace: str) -> Path:
+    return ws_dir(workspace) / "lifecycle.cursor"
+
+
+def legacy_state_path(workspace: str, worker_id: str) -> Path:
+    return LEGACY_REGISTRY_ROOT / workspace / f"{worker_id}.json"
+
+
+def ensure_dirs(workspace: str) -> None:
+    ws_dir(workspace).mkdir(parents=True, exist_ok=True)
+    registrations_dir(workspace).mkdir(parents=True, exist_ok=True)
+    (LEGACY_REGISTRY_ROOT / workspace / ".foreground-yields").mkdir(parents=True, exist_ok=True)
+
+
+@contextlib.contextmanager
+def workspace_lock(workspace: str) -> Iterator[None]:
+    ensure_dirs(workspace)
+    with lock_path(workspace).open("a+") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def atomic_json(path: Path, obj: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{time.time_ns()}")
+    tmp.write_text(json.dumps(obj, separators=(",", ":"), ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else None
+    except Exception:
+        return None
+
+
+def append_jsonl(path: Path, obj: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(obj, separators=(",", ":"), ensure_ascii=False) + "\n"
+    with path.open("a", encoding="utf-8") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        fh.write(line)
+        fh.flush()
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def emit_event(workspace: str, typ: str, reg: dict[str, Any], **extra: Any) -> None:
+    event: dict[str, Any] = {
+        "version": VERSION,
+        "type": typ,
+        "workspaceId": workspace,
+        "workerId": reg.get("workerId"),
+        "agentLabel": reg.get("agentLabel"),
+        "task": reg.get("task"),
+        "terminalId": reg.get("currentTerminalId") or reg.get("terminalId"),
+        "at": now_iso(),
+        "epoch": now_epoch(),
+    }
+    event.update({k: v for k, v in extra.items() if v is not None})
+    append_jsonl(events_path(workspace), event)
+
+
+def state_payload(reg: dict[str, Any], *, state: str, failure_class: str | None = None, evidence: str | None = None, reason: str | None = None) -> dict[str, Any]:
+    return {
+        "state": state,
+        "failureClass": failure_class,
+        "workspaceId": reg["workspaceId"],
+        "workerId": reg["workerId"],
+        "requestedTerminalId": reg["workerId"],
+        "terminalId": reg.get("currentTerminalId") or reg.get("terminalId") or reg["workerId"],
+        "terminalAliases": reg.get("terminalAliases", []),
+        "agentSessionId": reg.get("agentSessionId"),
+        "handoff": reg.get("handoff"),
+        "agentLabel": reg.get("agentLabel"),
+        "agentId": reg.get("agentId"),
+        "task": reg.get("task"),
+        "evidence": evidence,
+        "reason": reason,
+        "terminalCloseAttempted": bool(reg.get("terminalCloseAttempted")),
+        "terminalClosed": bool(reg.get("terminalClosed")),
+        "terminalClosedAt": reg.get("terminalClosedAt"),
+        "terminalCloseError": reg.get("terminalCloseError"),
+        "terminalCloseSkippedReason": reg.get("terminalCloseSkippedReason"),
+        "emitterMode": "workspace-supervisor",
+        "lastLifecycleEvent": reg.get("lastLifecycleEvent"),
+        "lastLifecycleAt": reg.get("lastLifecycleAt"),
+        "lastTerminalScanAt": reg.get("lastTerminalScanAt"),
+        "nativeResumeState": reg.get("nativeResumeState"),
+        "nativeResumeDeadlineEpoch": reg.get("nativeResumeDeadlineEpoch"),
+        "nativeResumeAttemptCount": int(reg.get("nativeResumeAttemptCount") or 0),
+        "nativeResumeAttemptedAt": reg.get("nativeResumeAttemptedAt"),
+        "nativeResumeReplacementTerminalId": reg.get("nativeResumeReplacementTerminalId"),
+        "nativeResumeSource": reg.get("nativeResumeSource"),
+        "nativeResumeContinuationPending": bool(reg.get("nativeResumeContinuationPending")),
+        "launchModel": reg.get("launchModel"),
+        "launchEffort": reg.get("launchEffort"),
+        "routeMode": reg.get("routeMode"),
+        "baseAgentLabel": reg.get("baseAgentLabel"),
+        "updatedAt": now_iso(),
+        "updatedEpoch": now_epoch(),
+        "supervisorPid": os.getpid(),
+        "concurrentEvent": False,
+        "schedulerDirective": (
+            "COLLECT_HANDOFF_AND_ADVANCE" if state == "DONE" else
+            "RECOVER_FAILED_WORKER_NOW" if state == "FAILED_TERMINAL" else
+            "ACTIVATE_DO_NOT_POLL_AND_RECOVER_SUPERVISION" if state == "SUPERVISION_LOST" else
+            "YIELD_TO_SCHEDULER"
+        ),
+    }
+
+
+def publish_state(reg: dict[str, Any], *, state: str, failure_class: str | None = None, evidence: str | None = None, reason: str | None = None) -> None:
+    reg["state"] = state
+    reg["failureClass"] = failure_class
+    reg["evidence"] = evidence
+    reg["stateReason"] = reason
+    reg["updatedEpoch"] = now_epoch()
+    reg["updatedAt"] = now_iso()
+    atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), reg)
+    atomic_json(legacy_state_path(reg["workspaceId"], reg["workerId"]), state_payload(reg, state=state, failure_class=failure_class, evidence=evidence, reason=reason))
+
+
+def load_registrations(workspace: str) -> list[dict[str, Any]]:
+    ensure_dirs(workspace)
+    out: list[dict[str, Any]] = []
+    for path in registrations_dir(workspace).glob("*.json"):
+        obj = read_json(path)
+        if obj and obj.get("workspaceId") == workspace:
+            out.append(obj)
+    return out
+
+
+def find_registration(workspace: str, terminal_id: str, agent_session_id: str | None = None) -> dict[str, Any] | None:
+    regs = load_registrations(workspace)
+    for reg in regs:
+        aliases = set(reg.get("terminalAliases") or [])
+        aliases.add(str(reg.get("workerId") or ""))
+        aliases.add(str(reg.get("currentTerminalId") or ""))
+        if terminal_id and terminal_id in aliases:
+            return reg
+    if agent_session_id:
+        matches = [r for r in regs if r.get("agentSessionId") == agent_session_id and r.get("state") not in {"DONE", "FAILED_TERMINAL", "SUPERVISION_LOST"}]
+        if matches:
+            return max(matches, key=lambda r: int(r.get("updatedEpoch") or 0))
+    return None
+
+
+def handoff_complete(reg: dict[str, Any]) -> bool:
+    path = reg.get("handoff")
+    if not path:
+        return False
+    try:
+        p = Path(path)
+        return p.is_file() and p.stat().st_size > 0 and "SUPERSET_WORKER_DONE" in p.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return False
+
+
+def run_superset(args: list[str], timeout: int = 15) -> tuple[int, str, str]:
+    try:
+        cp = subprocess.run(["superset", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout, check=False)
+        return cp.returncode, cp.stdout, cp.stderr
+    except Exception as exc:
+        return 127, "", str(exc)
+
+
+def host_db_candidates() -> list[Path]:
+    override = os.environ.get("SUPERSET_AUTO_HOST_DB")
+    if override:
+        return [Path(override)]
+    return sorted((HOME / "host").glob("*/host.db"))
+
+
+def _db_rows(query: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for db in host_db_candidates():
+        if not db.is_file():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.0)
+            con.row_factory = sqlite3.Row
+            try:
+                for row in con.execute(query, params).fetchall():
+                    item = dict(row)
+                    item["_hostDb"] = str(db)
+                    rows.append(item)
+            finally:
+                con.close()
+        except Exception:
+            continue
+    return rows
+
+
+def persisted_binding(terminal_id: str, workspace: str) -> dict[str, Any] | None:
+    rows = _db_rows(
+        """
+        SELECT b.terminal_id,b.workspace_id,b.agent_id,b.agent_session_id,b.ended_at,b.end_reason,
+               t.status,t.dispose_requested_at,t.ended_at AS terminal_ended_at
+          FROM terminal_agent_bindings b
+          JOIN terminal_sessions t ON t.id=b.terminal_id
+         WHERE b.terminal_id=? AND b.workspace_id=?
+        """,
+        (terminal_id, workspace),
+    )
+    if len(rows) != 1:
+        return None
+    return rows[0]
+
+
+def active_same_session_bindings(workspace: str, agent_session_id: str, exclude_terminal: str = "") -> list[dict[str, Any]]:
+    rows = _db_rows(
+        """
+        SELECT b.terminal_id,b.workspace_id,b.agent_id,b.agent_session_id,b.ended_at,b.end_reason,
+               t.status,t.dispose_requested_at,t.ended_at AS terminal_ended_at
+          FROM terminal_agent_bindings b
+          JOIN terminal_sessions t ON t.id=b.terminal_id
+         WHERE b.workspace_id=? AND b.agent_session_id=?
+           AND b.ended_at IS NULL AND t.status='active' AND t.dispose_requested_at IS NULL
+        """,
+        (workspace, agent_session_id),
+    )
+    return [row for row in rows if str(row.get("terminal_id") or "") != exclude_terminal]
+
+
+def send_resume_continuation(reg: dict[str, Any]) -> bool:
+    if not RESUME_CONTINUE:
+        return True
+    latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+    if latest.get("nativeResumeContinuationSent"):
+        return True
+    terminal_id = str(latest.get("currentTerminalId") or "")
+    if not terminal_id:
+        return False
+    rc, out, err = run_superset([
+        "terminals", "send", "--workspace", latest["workspaceId"], "--terminal", terminal_id,
+        "--text", RESUME_CONTINUE_TEXT,
+    ], timeout=20)
+    with workspace_lock(latest["workspaceId"]):
+        current = read_json(registration_path(latest["workspaceId"], latest["workerId"])) or latest
+        current["nativeResumeContinuationPending"] = False if rc == 0 else True
+        current["nativeResumeContinuationSent"] = rc == 0
+        current["nativeResumeContinuationAt"] = now_iso() if rc == 0 else None
+        if rc != 0:
+            current["nativeResumeContinuationError"] = (err or out or f"superset terminals send exited {rc}")[-2000:]
+        else:
+            current["nativeResumeContinuationError"] = None
+        atomic_json(registration_path(current["workspaceId"], current["workerId"]), current)
+    return rc == 0
+
+
+def rebind_native_resume(reg: dict[str, Any], new_terminal: str, *, source: str, send_continue: bool) -> bool:
+    if not new_terminal:
+        return False
+    with workspace_lock(reg["workspaceId"]):
+        latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+        if latest.get("state") in {"DONE", "FAILED_TERMINAL", "SUPERVISION_LOST"}:
+            return False
+        old_terminal = str(latest.get("currentTerminalId") or latest.get("workerId"))
+        aliases = list(dict.fromkeys([*(latest.get("terminalAliases") or []), old_terminal, new_terminal]))
+        latest["terminalAliases"] = aliases
+        latest["currentTerminalId"] = new_terminal
+        latest["nativeResumeState"] = "RESUMED"
+        latest["nativeResumeDeadlineEpoch"] = None
+        latest["nativeResumeReplacementTerminalId"] = new_terminal
+        latest["nativeResumeSource"] = source
+        latest["needsPromptScan"] = True
+        publish_state(latest, state="RUNNING", reason=f"same-session native resume rebound via {source}")
+        emit_event(latest["workspaceId"], "worker.native_resumed", latest, previousTerminalId=old_terminal, source=source)
+        reg = latest
+    if send_continue and RESUME_CONTINUE:
+        with workspace_lock(reg["workspaceId"]):
+            latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+            latest["nativeResumeContinuationPending"] = True
+            atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), latest)
+            reg = latest
+        send_resume_continuation(reg)
+    return True
+
+
+def learn_agent_session_from_persisted_binding(reg: dict[str, Any]) -> dict[str, Any]:
+    if reg.get("agentSessionId"):
+        return reg
+    terminal_id = str(reg.get("currentTerminalId") or reg.get("terminalId") or reg.get("workerId") or "")
+    if not terminal_id:
+        return reg
+    row = persisted_binding(terminal_id, reg["workspaceId"])
+    session_id = str((row or {}).get("agent_session_id") or "")
+    if not session_id:
+        return reg
+    with workspace_lock(reg["workspaceId"]):
+        latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+        if not latest.get("agentSessionId"):
+            latest["agentSessionId"] = session_id
+            atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), latest)
+        return latest
+
+
+def detect_native_auto_rebind(reg: dict[str, Any]) -> bool:
+    reg = learn_agent_session_from_persisted_binding(reg)
+    session_id = str(reg.get("agentSessionId") or "")
+    if not session_id:
+        return False
+    old_terminal = str(reg.get("currentTerminalId") or reg.get("terminalId") or reg.get("workerId") or "")
+    matches = active_same_session_bindings(reg["workspaceId"], session_id, old_terminal)
+    if len(matches) != 1:
+        return False
+    new_terminal = str(matches[0].get("terminal_id") or "")
+    return rebind_native_resume(reg, new_terminal, source="host-db-auto", send_continue=True)
+
+
+def explicit_resume_gate(reg: dict[str, Any]) -> tuple[bool, str]:
+    label = str(reg.get("agentLabel") or "")
+    if label.startswith("Codex ·"):
+        gate = HOME / "bin" / "auto-codex-quota-gate"
+        if not gate.is_file():
+            return False, "Codex native resume gate unavailable"
+        try:
+            cp = subprocess.run([str(gate), "--quiet"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25, check=False)
+        except Exception as exc:
+            return False, f"Codex native resume gate error: {exc}"
+        if cp.returncode != 0:
+            return False, (cp.stderr or cp.stdout or "Codex quota gate closed")[-2000:]
+    elif label == "Cursor · Grok 4.6 XHigh":
+        gate = HOME / "bin" / "auto-cursor-quota-gate"
+        if not gate.is_file():
+            return False, "Cursor native resume gate unavailable"
+        try:
+            cp = subprocess.run([str(gate), "cursorModels", "--quiet"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25, check=False)
+        except Exception as exc:
+            return False, f"Cursor native resume gate error: {exc}"
+        if cp.returncode != 0:
+            return False, (cp.stderr or cp.stdout or "Cursor quota gate closed")[-2000:]
+    elif label in {"Cursor · GPT-5.6 Sol Max", "Cursor · Fable 5 High"}:
+        gate = HOME / "bin" / "auto-cursor-quota-gate"
+        if not gate.is_file():
+            return False, "Cursor native resume gate unavailable"
+        try:
+            cp = subprocess.run([str(gate), "cursorOtherModels", "--quiet"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25, check=False)
+        except Exception as exc:
+            return False, f"Cursor native resume gate error: {exc}"
+        if cp.returncode != 0:
+            return False, (cp.stderr or cp.stdout or "Cursor quota gate closed")[-2000:]
+    return True, ""
+
+
+def resume_eligibility(reg: dict[str, Any]) -> tuple[bool, str, dict[str, Any] | None]:
+    reg = learn_agent_session_from_persisted_binding(reg)
+    session_id = str(reg.get("agentSessionId") or "")
+    if not session_id:
+        return False, "no persisted agent session id", None
+    terminal_id = str(reg.get("currentTerminalId") or reg.get("terminalId") or reg.get("workerId") or "")
+    row = persisted_binding(terminal_id, reg["workspaceId"])
+    if not row:
+        return False, "persisted terminal binding unavailable or ambiguous", None
+    if str(row.get("agent_session_id") or "") != session_id:
+        return False, "persisted agent session does not match supervised worker", row
+    if str(row.get("status") or "") != "exited":
+        return False, f"terminal status is {row.get('status')!r}, not exited", row
+    if row.get("dispose_requested_at") is not None:
+        return False, "terminal was deliberately disposed", row
+    if row.get("ended_at") is None or str(row.get("end_reason") or "") != "terminal-exited":
+        return False, f"binding end reason is {row.get('end_reason')!r}, not terminal-exited", row
+    if not reg.get("agentId"):
+        return False, "launch agent id unavailable", row
+    active = active_same_session_bindings(reg["workspaceId"], session_id, terminal_id)
+    if active:
+        return False, "same agent session is already active on another terminal", row
+    return True, "", row
+
+
+def attempt_explicit_native_resume(reg: dict[str, Any]) -> tuple[bool, str]:
+    reg = learn_agent_session_from_persisted_binding(reg)
+    attempts = int(reg.get("nativeResumeAttemptCount") or 0)
+    if RESUME_MAX_ATTEMPTS <= 0 or attempts >= RESUME_MAX_ATTEMPTS:
+        return False, "native resume attempt limit reached"
+    eligible, reason, _row = resume_eligibility(reg)
+    if not eligible:
+        return False, reason
+    gate_ok, gate_reason = explicit_resume_gate(reg)
+    if not gate_ok:
+        fail_worker(reg, "WORKER_QUOTA_TERMINATED", f"native same-session resume blocked by route quota gate: {gate_reason}")
+        return False, "resume blocked by quota gate"
+
+    with workspace_lock(reg["workspaceId"]):
+        latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+        current_attempts = int(latest.get("nativeResumeAttemptCount") or 0)
+        if current_attempts >= RESUME_MAX_ATTEMPTS:
+            return False, "native resume attempt limit reached"
+        latest["nativeResumeAttemptCount"] = current_attempts + 1
+        latest["nativeResumeAttemptedAt"] = now_iso()
+        latest["nativeResumeAttemptedEpoch"] = now_epoch()
+        latest["nativeResumeState"] = "EXPLICIT_LAUNCH"
+        latest["nativeResumeDeadlineEpoch"] = now_epoch() + RESUME_CONFIRM_SECONDS
+        publish_state(latest, state="NATIVE_RESUMING", reason="launching explicit Superset same-session resume")
+        emit_event(latest["workspaceId"], "worker.native_resume_attempt", latest, source="explicit")
+        reg = latest
+
+    args = [
+        "agents", "create", "--workspace", reg["workspaceId"], "--agent", str(reg["agentId"]),
+        "--resume-session", str(reg["agentSessionId"]),
+    ]
+    if reg.get("routeMode") == "native":
+        if reg.get("launchModel"):
+            args += ["--model", str(reg["launchModel"])]
+        if reg.get("launchEffort"):
+            args += ["--effort", str(reg["launchEffort"])]
+    if RESUME_CONTINUE:
+        args += ["--prompt", RESUME_CONTINUE_TEXT]
+    args += ["--json"]
+    rc, out, err = run_superset(args, timeout=30)
+    if rc != 0:
+        with workspace_lock(reg["workspaceId"]):
+            latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+            latest["nativeResumeLastError"] = (err or out or f"superset agents create exited {rc}")[-2000:]
+            atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), latest)
+        return False, (err or out or f"superset agents create exited {rc}")[-2000:]
+    try:
+        obj = json.loads(out)
+        new_terminal = str(obj.get("sessionId") or obj.get("terminalId") or "") if isinstance(obj, dict) else ""
+    except Exception as exc:
+        return False, f"invalid native resume JSON: {exc}"
+    if not new_terminal:
+        return False, "native resume returned no terminal/session id"
+
+    # Superset 1.27 binds the replacement terminal to the requested session as
+    # part of the launch itself. Still verify when the local host DB is readable;
+    # if verification lags, retain NATIVE_RESUMING until the confirmation grace.
+    matches = active_same_session_bindings(reg["workspaceId"], str(reg["agentSessionId"]), str(reg.get("currentTerminalId") or ""))
+    match_ids = {str(m.get("terminal_id") or "") for m in matches}
+    if match_ids and (new_terminal not in match_ids or len(match_ids) > 1):
+        # Automatic host recovery raced the explicit fallback. Dispose only the
+        # terminal this supervisor just created, then adopt the one remaining
+        # native binding if it is unambiguous. This prevents duplicate writers.
+        run_superset(["terminals", "close", "--workspace", reg["workspaceId"], "--terminal", new_terminal, "--json"], timeout=20)
+        others = [m for m in matches if str(m.get("terminal_id") or "") != new_terminal]
+        if len(others) == 1:
+            other_terminal = str(others[0].get("terminal_id") or "")
+            if rebind_native_resume(reg, other_terminal, source="host-db-race-winner", send_continue=True):
+                return True, ""
+        return False, "native resume race produced ambiguous same-session bindings; explicit terminal was closed"
+    if rebind_native_resume(reg, new_terminal, source="explicit", send_continue=False):
+        if RESUME_CONTINUE:
+            with workspace_lock(reg["workspaceId"]):
+                latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+                latest["nativeResumeContinuationPending"] = False
+                latest["nativeResumeContinuationSent"] = True
+                latest["nativeResumeContinuationAt"] = now_iso()
+                atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), latest)
+        return True, ""
+    return False, "native resume launched but supervision could not rebind"
+
+
+def terminal_read(workspace: str, terminal_id: str) -> tuple[bool, str, str]:
+    rc, out, err = run_superset(["terminals", "read", "--workspace", workspace, "--terminal", terminal_id, "--max-lines", str(MAX_LINES), "--json"], timeout=20)
+    if rc != 0:
+        return False, "", err or out
+    try:
+        obj = json.loads(out)
+        text = obj.get("text") if isinstance(obj, dict) else ""
+        return True, str(text or ""), ""
+    except Exception as exc:
+        return False, "", f"invalid terminal read JSON: {exc}"
+
+
+def quota_evidence(text: str) -> str | None:
+    lines = [ln for ln in text.splitlines() if QUOTA_RE.search(ln)]
+    return "\n".join(lines[-6:]) or None
+
+
+def provider_busy_evidence(text: str) -> str | None:
+    tail = "\n".join(text.splitlines()[-30:])
+    if "Error: High Load" in tail and re.search(r"experiencing high demand for Cursor", tail, re.I):
+        lines = [ln for ln in tail.splitlines() if re.search(r"Error: High Load|experiencing high demand for Cursor|Please switch to Auto, another model, or try again", ln, re.I)]
+        return "\n".join(lines[-4:])
+    return None
+
+
+def model_unavailable_evidence(text: str) -> str | None:
+    lines = [ln for ln in text.splitlines()[-24:] if MODEL_UNAVAILABLE_RE.search(ln)]
+    return "\n".join(lines[-4:]) or None
+
+
+def close_terminal(reg: dict[str, Any]) -> None:
+    if not AUTO_CLOSE:
+        reg["terminalCloseSkippedReason"] = "disabled by SUPERSET_AUTO_CLOSE_COMPLETED_WORKERS=0"
+        return
+    if reg.get("terminalCloseAttempted"):
+        return
+    reg["terminalCloseAttempted"] = True
+    terminal_id = str(reg.get("currentTerminalId") or reg.get("workerId"))
+    rc, out, err = run_superset(["terminals", "close", "--workspace", reg["workspaceId"], "--terminal", terminal_id, "--json"], timeout=20)
+    if rc == 0:
+        reg["terminalClosed"] = True
+        reg["terminalClosedAt"] = now_iso()
+        reg["terminalCloseError"] = None
+        reg["terminalCloseSkippedReason"] = None
+    else:
+        reg["terminalClosed"] = False
+        reg["terminalCloseError"] = (err or out or f"superset terminals close exited {rc}")[-2000:]
+
+
+def registration_scan_interval(reg: dict[str, Any], now: int) -> int:
+    last_hook = int(reg.get("lastLifecycleEpoch") or 0)
+    if last_hook and now - last_hook <= HOOK_FRESH_SECONDS:
+        return SCAN_FRESH_LIFECYCLE_SECONDS
+    if not reg.get("hookObserved"):
+        return SCAN_NO_HOOK_SECONDS
+    return SCAN_SECONDS
+
+
+def process_lifecycle_event(workspace: str, ev: dict[str, Any]) -> None:
+    terminal_id = str(ev.get("terminalId") or "")
+    agent_session_id = str(ev.get("agentSessionId") or "") or None
+    event_type = str(ev.get("eventType") or "")
+    if not terminal_id or not event_type:
+        return
+    with workspace_lock(workspace):
+        reg = find_registration(workspace, terminal_id, agent_session_id)
+        if not reg:
+            return
+        if reg.get("state") in {"DONE", "FAILED_TERMINAL", "SUPERVISION_LOST"}:
+            return
+        old_terminal = str(reg.get("currentTerminalId") or reg.get("workerId"))
+        old_state = str(reg.get("state") or "RUNNING")
+        tap_previous_terminal = str(ev.get("previousTerminalId") or "") or None
+        if agent_session_id and not reg.get("agentSessionId"):
+            reg["agentSessionId"] = agent_session_id
+        same_session_rebind = bool(
+            agent_session_id
+            and reg.get("agentSessionId") == agent_session_id
+            and (terminal_id != old_terminal or tap_previous_terminal or reg.get("nativeResumeState") == "REBIND_EVENT_PENDING")
+        )
+        if same_session_rebind:
+            previous_terminal = tap_previous_terminal or old_terminal
+            aliases = list(dict.fromkeys([*(reg.get("terminalAliases") or []), previous_terminal, old_terminal, terminal_id]))
+            reg["terminalAliases"] = aliases
+            reg["currentTerminalId"] = terminal_id
+            reg["nativeResumeState"] = "RESUMED"
+            reg["nativeResumeDeadlineEpoch"] = None
+            reg["nativeResumeReplacementTerminalId"] = terminal_id
+            reg["nativeResumeSource"] = "lifecycle"
+            reg["nativeResumeContinuationPending"] = bool(RESUME_CONTINUE and not reg.get("nativeResumeContinuationSent"))
+            emit_event(workspace, "worker.native_resumed", reg, previousTerminalId=previous_terminal, source="lifecycle")
+        reg["hookObserved"] = True
+        reg["lastLifecycleEvent"] = event_type
+        reg["lastLifecycleAt"] = ev.get("at") or now_iso()
+        reg["lastLifecycleEpoch"] = int(ev.get("epoch") or now_epoch())
+        if event_type in {"Start", "Attached", "SessionStart", "PostToolUse", "tool_use", "tool_execution_end"}:
+            if old_state in {"WAITING_INPUT", "NATIVE_RESUMING", "AWAITING_HANDOFF"}:
+                emit_event(workspace, "worker.running", reg, source="lifecycle")
+            reg["nativeResumeState"] = None if event_type != "SessionStart" else reg.get("nativeResumeState")
+            publish_state(reg, state="RUNNING", reason=f"lifecycle:{event_type}")
+        elif event_type in {"PermissionRequest", "awaiting_input", "waiting"}:
+            if old_state != "WAITING_INPUT":
+                emit_event(workspace, "worker.waiting_input", reg, source="lifecycle")
+            publish_state(reg, state="WAITING_INPUT", reason=f"lifecycle:{event_type}")
+        elif event_type in {"Stop", "Detached", "SessionEnd", "session_end"}:
+            # Stop is a turn boundary, not necessarily process death. Keep it live
+            # but scan promptly; a handoff still wins if the worker completed.
+            reg["needsPromptScan"] = True
+            if event_type in {"Detached", "SessionEnd", "session_end"}:
+                reg["nativeResumeState"] = "GRACE"
+                reg["nativeResumeDeadlineEpoch"] = now_epoch() + RESUME_GRACE_SECONDS
+                if old_state != "NATIVE_RESUMING":
+                    emit_event(workspace, "worker.native_resume_grace", reg, source="lifecycle")
+                publish_state(reg, state="NATIVE_RESUMING", reason=f"lifecycle:{event_type}")
+            else:
+                publish_state(reg, state="AWAITING_HANDOFF", reason="lifecycle:Stop")
+        else:
+            publish_state(reg, state=old_state, reason=f"lifecycle:{event_type}")
+
+
+def consume_lifecycle(workspace: str) -> None:
+    path = lifecycle_path(workspace)
+    if not path.exists():
+        return
+    try:
+        offset = int(cursor_path(workspace).read_text().strip()) if cursor_path(workspace).exists() else 0
+    except Exception:
+        offset = 0
+    try:
+        size = path.stat().st_size
+        if offset < 0 or offset > size:
+            offset = 0
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(offset)
+            while True:
+                line = fh.readline()
+                if not line:
+                    break
+                try:
+                    ev = json.loads(line)
+                    if isinstance(ev, dict):
+                        process_lifecycle_event(workspace, ev)
+                except Exception:
+                    pass
+            new_offset = fh.tell()
+        cursor_path(workspace).write_text(str(new_offset), encoding="utf-8")
+    except Exception:
+        return
+
+
+def complete_worker(reg: dict[str, Any], reason: str) -> None:
+    with workspace_lock(reg["workspaceId"]):
+        latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+        if latest.get("state") == "DONE":
+            return
+        if not handoff_complete(latest):
+            return
+        close_terminal(latest)
+        publish_state(latest, state="DONE", reason=reason)
+        emit_event(latest["workspaceId"], "worker.completed", latest, terminalClosed=bool(latest.get("terminalClosed")))
+
+
+def fail_worker(reg: dict[str, Any], failure_class: str, evidence: str) -> None:
+    with workspace_lock(reg["workspaceId"]):
+        latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+        if latest.get("state") in {"DONE", "FAILED_TERMINAL", "SUPERVISION_LOST"}:
+            return
+        if handoff_complete(latest):
+            close_terminal(latest)
+            publish_state(latest, state="DONE", reason="handoff won terminal/fatal race")
+            emit_event(latest["workspaceId"], "worker.completed", latest, terminalClosed=bool(latest.get("terminalClosed")))
+            return
+        publish_state(latest, state="FAILED_TERMINAL", failure_class=failure_class, evidence=evidence, reason="terminal fatal evidence")
+        emit_event(latest["workspaceId"], "worker.failed", latest, failureClass=failure_class)
+
+
+def supervision_lost(reg: dict[str, Any], evidence: str) -> None:
+    with workspace_lock(reg["workspaceId"]):
+        latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+        if latest.get("state") in {"DONE", "FAILED_TERMINAL", "SUPERVISION_LOST"}:
+            return
+        if handoff_complete(latest):
+            latest["terminalCloseSkippedReason"] = "terminal unreadable before workspace-supervisor cleanup"
+            publish_state(latest, state="DONE", reason="valid handoff present after terminal became unreadable")
+            emit_event(latest["workspaceId"], "worker.completed", latest, terminalClosed=False)
+            return
+        publish_state(latest, state="SUPERVISION_LOST", failure_class="TERMINAL_NOT_ACTIVE", evidence=evidence, reason="native same-session recovery exhausted")
+        emit_event(latest["workspaceId"], "worker.supervision_lost", latest)
+
+
+def inspect_worker(reg: dict[str, Any]) -> None:
+    if reg.get("state") in {"DONE", "FAILED_TERMINAL", "SUPERVISION_LOST"}:
+        return
+    if handoff_complete(reg):
+        complete_worker(reg, "valid SUPERSET_WORKER_DONE handoff present")
+        return
+    if reg.get("nativeResumeContinuationPending"):
+        send_resume_continuation(reg)
+        reg = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+
+    # Superset 1.27 may have already created a fresh terminal for the same
+    # agent session before the lifecycle hook arrives (notably Codex). During
+    # NATIVE_RESUMING, use the local host binding database as a read-only
+    # second source and rebind immediately when there is exactly one match.
+    if reg.get("state") == "NATIVE_RESUMING" and detect_native_auto_rebind(reg):
+        return
+
+    now = now_epoch()
+    current_terminal = str(reg.get("currentTerminalId") or reg.get("workerId"))
+    last_scan = int(reg.get("lastTerminalScanEpoch") or 0)
+    due = bool(reg.get("needsPromptScan")) or now - last_scan >= registration_scan_interval(reg, now)
+    if not due:
+        if reg.get("state") == "NATIVE_RESUMING":
+            deadline = int(reg.get("nativeResumeDeadlineEpoch") or 0)
+            if deadline and now >= deadline:
+                # First let native automatic recovery win. If it did not, make
+                # one explicit same-session launch only when Superset's own
+                # persisted predicate proves an unexpected terminal exit.
+                if detect_native_auto_rebind(reg):
+                    return
+                ok, reason = attempt_explicit_native_resume(reg)
+                if ok:
+                    return
+                latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+                if latest.get("state") == "FAILED_TERMINAL":
+                    return
+                # If an explicit launch was just attempted and has a confirm
+                # deadline, leave it protected until that deadline expires.
+                new_deadline = int(latest.get("nativeResumeDeadlineEpoch") or 0)
+                if latest.get("nativeResumeState") == "EXPLICIT_LAUNCH" and new_deadline > now_epoch():
+                    return
+                supervision_lost(latest, f"native resume unavailable: {reason}")
+        return
+
+    ok, text, err = terminal_read(reg["workspaceId"], current_terminal)
+    with workspace_lock(reg["workspaceId"]):
+        latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+        latest["lastTerminalScanEpoch"] = now
+        latest["lastTerminalScanAt"] = now_iso()
+        latest["needsPromptScan"] = False
+        atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), latest)
+        reg = latest
+
+    if ok:
+        quota = quota_evidence(text)
+        if quota:
+            fail_worker(reg, "WORKER_QUOTA_TERMINATED", quota)
+            return
+        busy = provider_busy_evidence(text)
+        if busy:
+            fail_worker(reg, "WORKER_PROVIDER_BUSY", busy)
+            return
+        unavailable = model_unavailable_evidence(text)
+        if unavailable:
+            fail_worker(reg, "WORKER_MODEL_UNAVAILABLE", unavailable)
+            return
+        if reg.get("state") == "NATIVE_RESUMING":
+            with workspace_lock(reg["workspaceId"]):
+                latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+                latest["nativeResumeState"] = None
+                latest["nativeResumeDeadlineEpoch"] = None
+                publish_state(latest, state="RUNNING", reason="terminal became readable during native resume grace")
+                emit_event(latest["workspaceId"], "worker.running", latest, source="terminal-recovered")
+        elif reg.get("state") == "AWAITING_HANDOFF":
+            with workspace_lock(reg["workspaceId"]):
+                latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+                publish_state(latest, state="RUNNING", reason="turn stopped without handoff; terminal still readable")
+        return
+
+    # A read failure is control loss, not provider failure. First protect the
+    # same logical writer and give Superset's automatic resume machinery a
+    # bounded chance. Do not dispatch a fallback writer while this state holds.
+    with workspace_lock(reg["workspaceId"]):
+        latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+        if handoff_complete(latest):
+            latest["terminalCloseSkippedReason"] = "terminal unreadable before workspace-supervisor cleanup"
+            publish_state(latest, state="DONE", reason="valid handoff present after terminal became unreadable")
+            emit_event(latest["workspaceId"], "worker.completed", latest, terminalClosed=False)
+            return
+        # Opportunistically learn the provider-native agent session before the
+        # old binding transitions, so recovery does not depend on hook timing.
+        row = persisted_binding(current_terminal, latest["workspaceId"])
+        if row and not latest.get("agentSessionId") and row.get("agent_session_id"):
+            latest["agentSessionId"] = str(row.get("agent_session_id"))
+        deadline = int(latest.get("nativeResumeDeadlineEpoch") or 0)
+        if latest.get("state") != "NATIVE_RESUMING" or deadline <= 0:
+            latest["nativeResumeState"] = "GRACE"
+            latest["nativeResumeDeadlineEpoch"] = now_epoch() + RESUME_GRACE_SECONDS
+            publish_state(latest, state="NATIVE_RESUMING", reason="terminal unreadable; allowing Superset automatic same-session resume grace")
+            emit_event(latest["workspaceId"], "worker.native_resume_grace", latest, source="terminal-read-failure")
+            return
+        if now_epoch() < deadline:
+            return
+        reg = latest
+
+    if detect_native_auto_rebind(reg):
+        return
+    ok, reason = attempt_explicit_native_resume(reg)
+    if ok:
+        return
+    latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+    if latest.get("state") == "FAILED_TERMINAL":
+        return
+    if latest.get("nativeResumeState") == "EXPLICIT_LAUNCH" and int(latest.get("nativeResumeDeadlineEpoch") or 0) > now_epoch():
+        return
+    supervision_lost(latest, err[-2000:] if err else f"terminal unreadable; native resume unavailable: {reason}")
+
+
+def write_heartbeat(workspace: str) -> None:
+    atomic_json(heartbeat_path(workspace), {
+        "version": VERSION,
+        "marker": MARKER,
+        "workspaceId": workspace,
+        "pid": os.getpid(),
+        "updatedAt": now_iso(),
+        "updatedEpoch": now_epoch(),
+    })
+
+
+def daemon(workspace: str) -> int:
+    ensure_dirs(workspace)
+    dlock = daemon_lock_path(workspace).open("a+")
+    try:
+        fcntl.flock(dlock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return 0
+    pid_path(workspace).write_text(str(os.getpid()), encoding="utf-8")
+    stop = False
+
+    def on_stop(signum: int, frame: Any) -> None:
+        nonlocal stop
+        stop = True
+
+    signal.signal(signal.SIGTERM, on_stop)
+    signal.signal(signal.SIGINT, on_stop)
+    signal.signal(signal.SIGHUP, on_stop)
+    last_hb = 0
+    try:
+        while not stop:
+            consume_lifecycle(workspace)
+            regs = load_registrations(workspace)
+            for reg in regs:
+                try:
+                    inspect_worker(reg)
+                except Exception as exc:
+                    append_jsonl(ws_dir(workspace) / "errors.jsonl", {"at": now_iso(), "workerId": reg.get("workerId"), "error": str(exc)})
+            now = now_epoch()
+            if now - last_hb >= HEARTBEAT_SECONDS:
+                write_heartbeat(workspace)
+                last_hb = now
+            time.sleep(1)
+    finally:
+        with contextlib.suppress(Exception):
+            pid_path(workspace).unlink()
+        with contextlib.suppress(Exception):
+            dlock.close()
+    return 0
+
+
+def ensure_daemon(workspace: str) -> dict[str, Any]:
+    ensure_dirs(workspace)
+    pid = 0
+    try:
+        pid = int(pid_path(workspace).read_text().strip())
+        os.kill(pid, 0)
+        return {"ok": True, "pid": pid, "started": False, "heartbeatFile": str(heartbeat_path(workspace)), "eventsFile": str(events_path(workspace))}
+    except Exception:
+        pass
+    log = ws_dir(workspace) / "supervisor.log"
+    with log.open("ab", buffering=0) as fh:
+        proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "daemon", "--workspace", workspace], stdin=subprocess.DEVNULL, stdout=fh, stderr=fh, start_new_session=True, close_fds=True)
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        try:
+            pid = int(pid_path(workspace).read_text().strip())
+            os.kill(pid, 0)
+            hb = read_json(heartbeat_path(workspace))
+            if hb and int(hb.get("pid") or 0) == pid:
+                return {"ok": True, "pid": pid, "started": True, "heartbeatFile": str(heartbeat_path(workspace)), "eventsFile": str(events_path(workspace))}
+        except Exception:
+            pass
+        time.sleep(0.05)
+    return {"ok": False, "pid": proc.pid, "started": True, "error": "workspace supervisor failed to publish pid", "logFile": str(log)}
+
+
+def register_worker(ns: argparse.Namespace) -> dict[str, Any]:
+    workspace = ns.workspace
+    worker_id = ns.worker_id or ns.terminal
+    ensure_dirs(workspace)
+    reg = {
+        "version": VERSION,
+        "workerId": worker_id,
+        "workspaceId": workspace,
+        "terminalId": ns.terminal,
+        "currentTerminalId": ns.terminal,
+        "terminalAliases": [ns.terminal],
+        "supersetSessionId": ns.session_id or ns.terminal,
+        "agentSessionId": None,
+        "agentLabel": ns.label or None,
+        "agentId": ns.agent_id or None,
+        "routeMode": ns.route_mode or None,
+        "baseAgentLabel": ns.base_agent_label or None,
+        "launchModel": ns.model or None,
+        "launchEffort": ns.effort or None,
+        "task": ns.task or None,
+        "handoff": ns.handoff,
+        "state": "RUNNING",
+        "failureClass": None,
+        "evidence": None,
+        "hookObserved": False,
+        "lastLifecycleEvent": None,
+        "lastLifecycleAt": None,
+        "lastLifecycleEpoch": 0,
+        "lastTerminalScanAt": None,
+        "lastTerminalScanEpoch": 0,
+        "needsPromptScan": False,
+        "nativeResumeState": None,
+        "nativeResumeDeadlineEpoch": None,
+        "nativeResumeAttemptCount": 0,
+        "nativeResumeAttemptedAt": None,
+        "nativeResumeAttemptedEpoch": None,
+        "nativeResumeReplacementTerminalId": None,
+        "nativeResumeSource": None,
+        "nativeResumeContinuationPending": False,
+        "nativeResumeContinuationSent": False,
+        "nativeResumeContinuationAt": None,
+        "nativeResumeContinuationError": None,
+        "nativeResumeLastError": None,
+        "terminalCloseAttempted": False,
+        "terminalClosed": False,
+        "terminalClosedAt": None,
+        "terminalCloseError": None,
+        "terminalCloseSkippedReason": None,
+        "registeredAt": now_iso(),
+        "registeredEpoch": now_epoch(),
+        "updatedAt": now_iso(),
+        "updatedEpoch": now_epoch(),
+    }
+    with workspace_lock(workspace):
+        atomic_json(registration_path(workspace, worker_id), reg)
+        atomic_json(legacy_state_path(workspace, worker_id), state_payload(reg, state="RUNNING", reason="registered with workspace supervisor"))
+        emit_event(workspace, "worker.dispatched", reg)
+    ensured = ensure_daemon(workspace)
+    return {
+        "ok": bool(ensured.get("ok")),
+        "mode": "workspace",
+        "workerId": worker_id,
+        "stateFile": str(legacy_state_path(workspace, worker_id)),
+        "registrationFile": str(registration_path(workspace, worker_id)),
+        "heartbeatFile": str(heartbeat_path(workspace)),
+        "eventsFile": str(events_path(workspace)),
+        "lifecycleFile": str(lifecycle_path(workspace)),
+        "handoff": ns.handoff,
+        "pid": ensured.get("pid"),
+        "started": ensured.get("started"),
+        "error": ensured.get("error"),
+    }
+
+
+def status(workspace: str) -> dict[str, Any]:
+    hb = read_json(heartbeat_path(workspace))
+    regs = load_registrations(workspace)
+    return {"marker": MARKER, "version": VERSION, "workspaceId": workspace, "heartbeat": hb, "workers": regs}
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description="Superset AUTO workspace worker supervisor")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    for name in ("ensure", "daemon", "status"):
+        sp = sub.add_parser(name)
+        sp.add_argument("--workspace", required=True)
+    reg = sub.add_parser("register")
+    reg.add_argument("--workspace", required=True)
+    reg.add_argument("--terminal", required=True)
+    reg.add_argument("--worker-id")
+    reg.add_argument("--session-id")
+    reg.add_argument("--handoff", required=True)
+    reg.add_argument("--label", default="")
+    reg.add_argument("--agent-id", default="")
+    reg.add_argument("--route-mode", default="")
+    reg.add_argument("--base-agent-label", default="")
+    reg.add_argument("--model", default="")
+    reg.add_argument("--effort", default="")
+    reg.add_argument("--task", default="")
+    ns = p.parse_args()
+    if ns.cmd == "daemon":
+        return daemon(ns.workspace)
+    if ns.cmd == "ensure":
+        print(json.dumps(ensure_daemon(ns.workspace), separators=(",", ":")))
+        return 0
+    if ns.cmd == "register":
+        result = register_worker(ns)
+        print(json.dumps(result, separators=(",", ":")))
+        return 0 if result.get("ok") else 70
+    if ns.cmd == "status":
+        print(json.dumps(status(ns.workspace), indent=2, sort_keys=True))
+        return 0
+    return 64
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

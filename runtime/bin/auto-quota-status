@@ -1,0 +1,1774 @@
+#!/usr/bin/env python3
+"""Read-only quota snapshot helper for Superset AUTO v9.8.17.
+
+Current built-in adapters:
+  * ChatGPT Plus / Codex: documented local `codex app-server` JSON-RPC
+    `account/rateLimits/read` (no model turn).
+  * Claude Pro: Anthropic account OAuth usage endpoint using the existing Claude
+    Code login. The helper never prints/stores credentials and never refreshes
+    OAuth tokens itself. This endpoint contract is not a documented Claude Code
+    CLI API, so failures degrade to UNKNOWN rather than blocking AUTO.
+
+  * Muse Spark 1.3 Free: read-only local OpenCode SQLite request counter.
+  * OpenCode Go: authenticated read-only `/zen/go/v1/usage` endpoint exposing
+    rolling 5-hour, weekly, and monthly usage windows. Credentials are read from
+    the existing OpenCode auth store and are never printed or cached.
+
+  * Antigravity: official `agy -p "/quota" --output-format json` read-only
+    print-mode quota summary for Gemini and Claude/GPT 5-hour + weekly pools.
+
+  * Cursor Pro: read-only `GET https://cursor.com/api/usage-summary` using the
+    existing Cursor CLI/IDE login. This provider-owned dashboard endpoint is
+    undocumented; failures degrade to UNKNOWN/cache and never authorize paid
+    on-demand usage. Exposes Cursor Models + Other Models monthly pools.
+
+Other providers can be merged through ~/.superset/auto/quota-extra.json using
+this helper's normalized `pools` schema.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import email.utils
+import getpass
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from typing import Any
+
+SCHEMA_VERSION = "superset-auto-quota.v1"
+DEFAULT_TTL = 300
+ACCEPTABLE_AGE = 900
+CACHE_PATH = Path.home() / ".superset" / "auto" / "quota-status.json"
+EXTRA_PATH = Path.home() / ".superset" / "auto" / "quota-extra.json"
+UNKNOWN_POOLS: tuple[str, ...] = ()
+
+OPENCODE_DATA_ROOT = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")) / "opencode"
+OPENCODE_AUTH_PATH = OPENCODE_DATA_ROOT / "auth.json"
+OPENCODE_DB_PATH = OPENCODE_DATA_ROOT / "opencode.db"
+OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage"
+CURSOR_USAGE_URL = "https://cursor.com/api/usage-summary"
+CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CURSOR_CLI_AUTH_PATHS = (
+    Path.home() / ".config" / "cursor" / "auth.json",
+    Path.home() / ".cursor" / "auth.json",
+)
+CURSOR_IDE_STATE_DB = Path.home() / "Library" / "Application Support" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+
+MUSE_FREE_MODEL_ID = "muse-spark-1.3-contributor-free"
+MUSE_FREE_ESTIMATED_DAILY_LIMIT = 1000
+MUSE_FREE_NEAR_CAP = 950
+MUSE_FREE_HANDOFF_READY = 980
+
+
+def now_utc() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def iso_now() -> str:
+    return now_utc().isoformat()
+
+
+def parse_iso(value: str | None) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        return parsed.astimezone(dt.timezone.utc)
+    except Exception:
+        return None
+
+
+def unix_to_iso(value: Any) -> str | None:
+    try:
+        return dt.datetime.fromtimestamp(float(value), tz=dt.timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def clamp_percent(value: Any) -> float | None:
+    try:
+        v = float(value)
+    except Exception:
+        return None
+    if v < 0:
+        return 0.0
+    if v > 100:
+        return 100.0
+    return round(v, 3)
+
+
+def freshness(observed_at: str | None) -> tuple[str, int | None]:
+    t = parse_iso(observed_at)
+    if not t:
+        return "unknown", None
+    age = max(0, int((now_utc() - t).total_seconds()))
+    if age < DEFAULT_TTL:
+        return "fresh", age
+    if age <= ACCEPTABLE_AGE:
+        return "acceptable", age
+    return "stale", age
+
+
+def pressure_state(used: float | None, hard_cap: bool, available: str) -> str:
+    if hard_cap or available == "unavailable":
+        return "UNAVAILABLE"
+    if used is None or available == "unknown":
+        return "UNKNOWN"
+    if used >= 90:
+        return "CRITICAL"
+    if used >= 85:
+        return "VERY_HOT"
+    if used >= 75:
+        return "HOT"
+    if used >= 60:
+        return "WARM"
+    return "NORMAL"
+
+
+def window_record(used: Any, resets_at: str | None, window_minutes: int | None = None) -> dict[str, Any] | None:
+    used_pct = clamp_percent(used)
+    if used_pct is None:
+        return None
+    return {
+        "usedPercent": used_pct,
+        "remainingPercent": round(100.0 - used_pct, 3),
+        "resetsAt": resets_at,
+        "windowMinutes": window_minutes,
+    }
+
+
+def normalize_pool(
+    *,
+    source: str,
+    observed_at: str,
+    five_hour: dict[str, Any] | None,
+    weekly: dict[str, Any] | None,
+    hard_cap: bool = False,
+    availability: str = "available",
+    error: str | None = None,
+    contract_stability: str = "supported",
+) -> dict[str, Any]:
+    fresh, age = freshness(observed_at)
+    used = five_hour.get("usedPercent") if five_hour else None
+    return {
+        "availability": availability,
+        "source": source,
+        "contractStability": contract_stability,
+        "observedAt": observed_at,
+        "freshness": fresh,
+        "ageSeconds": age,
+        "pressureState": pressure_state(used, hard_cap, availability),
+        "hardCap": bool(hard_cap),
+        "fiveHour": five_hour,
+        "weekly": weekly,
+        "error": error,
+    }
+
+
+def unknown_pool(reason: str | None = None) -> dict[str, Any]:
+    return normalize_pool(
+        source="unknown",
+        observed_at=iso_now(),
+        five_hour=None,
+        weekly=None,
+        availability="unknown",
+        error=reason,
+        contract_stability="unknown",
+    )
+
+
+def _resolve_codex_binary() -> str | None:
+    # Prefer an explicit override, then the same ChatGPT-bundled Codex binary
+    # used by the production Superset presets. Falling back to PATH is useful
+    # for systems without the desktop app, but avoids accidentally querying an
+    # older PATH-installed Codex when the bundled binary is available.
+    for env_name in ("SUPERSET_AUTO_CODEX_BIN", "AUTO_CODEX_BIN"):
+        value = os.environ.get(env_name)
+        if value and Path(value).is_file() and os.access(value, os.X_OK):
+            return value
+
+    bundled = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
+    if bundled.is_file() and os.access(bundled, os.X_OK):
+        return str(bundled)
+
+    return shutil.which("codex")
+
+
+def _short_rpc_error(obj: dict[str, Any] | None) -> str | None:
+    if not isinstance(obj, dict):
+        return None
+    err = obj.get("error")
+    if not isinstance(err, dict):
+        return None
+    msg = err.get("message")
+    code = err.get("code")
+    if isinstance(msg, str) and msg:
+        return f"{code}: {msg}" if code is not None else msg
+    return f"RPC error {code}" if code is not None else "RPC error"
+
+
+def run_codex_adapter(timeout: int = 12) -> dict[str, Any]:
+    """Read Codex limits through app-server without making a model turn.
+
+    The app-server handshake is stateful: clients must wait for the initialize
+    response *before* sending the initialized notification and later requests.
+    Do not batch all three messages into communicate(); newer app-server builds
+    can reject or never service the follow-up request when initialization has
+    not completed yet.
+    """
+    import queue
+    import threading
+
+    codex = _resolve_codex_binary()
+    if not codex:
+        return unknown_pool("codex executable not found")
+
+    try:
+        proc = subprocess.Popen(
+            [codex, "app-server"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+    except Exception as exc:
+        return unknown_pool(f"codex app-server launch failed: {type(exc).__name__}")
+
+    stdout_q: "queue.Queue[str | None]" = queue.Queue()
+    stderr_lines: list[str] = []
+
+    def _read_stdout() -> None:
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                stdout_q.put(line)
+        finally:
+            stdout_q.put(None)
+
+    def _read_stderr() -> None:
+        try:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                if len(stderr_lines) < 20:
+                    stderr_lines.append(line.rstrip())
+        except Exception:
+            pass
+
+    threading.Thread(target=_read_stdout, daemon=True).start()
+    threading.Thread(target=_read_stderr, daemon=True).start()
+
+    def _send(obj: dict[str, Any]) -> bool:
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write(json.dumps(obj, separators=(",", ":")) + "\n")
+            proc.stdin.flush()
+            return True
+        except Exception:
+            return False
+
+    def _wait_for_id(request_id: int, deadline: float) -> dict[str, Any] | None:
+        while time.monotonic() < deadline:
+            remaining = max(0.01, deadline - time.monotonic())
+            try:
+                line = stdout_q.get(timeout=remaining)
+            except queue.Empty:
+                return None
+            if line is None:
+                return None
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(obj, dict) and obj.get("id") == request_id:
+                return obj
+        return None
+
+    try:
+        overall_deadline = time.monotonic() + timeout
+
+        # Mirror the official app-server lifecycle exactly: initialize request,
+        # wait for its response, then acknowledge with initialized.
+        if not _send(
+            {
+                "method": "initialize",
+                "id": 1,
+                "params": {
+                    "clientInfo": {
+                        "name": "superset-auto-quota",
+                        "title": "Superset AUTO Quota",
+                        "version": "1.1",
+                    },
+                    "capabilities": {},
+                },
+            }
+        ):
+            return unknown_pool("failed to write Codex initialize request")
+
+        init_response = _wait_for_id(1, overall_deadline)
+        if not init_response:
+            detail = "no initialize response from codex app-server"
+            if stderr_lines:
+                detail += "; app-server wrote stderr"
+            return unknown_pool(detail)
+        init_error = _short_rpc_error(init_response)
+        if init_error:
+            return unknown_pool(f"codex initialize failed: {init_error}")
+
+        if not _send({"method": "initialized", "params": {}}):
+            return unknown_pool("failed to write Codex initialized notification")
+
+        # Stable API; no experimental opt-in is required.
+        if not _send({"method": "account/rateLimits/read", "id": 2}):
+            return unknown_pool("failed to write Codex rate-limit request")
+
+        response = _wait_for_id(2, overall_deadline)
+        if not response:
+            detail = "no account/rateLimits/read response"
+            if stderr_lines:
+                detail += "; app-server wrote stderr"
+            return unknown_pool(detail)
+        rpc_error = _short_rpc_error(response)
+        if rpc_error:
+            return unknown_pool(f"codex account/rateLimits/read failed: {rpc_error}")
+
+        result = response.get("result") or {}
+        root = result.get("rateLimits") or {}
+        by_id = result.get("rateLimitsByLimitId") or {}
+        canonical = by_id.get("codex") if isinstance(by_id, dict) else None
+        snapshots = []
+        if isinstance(canonical, dict):
+            snapshots.append(canonical)
+        if isinstance(root, dict):
+            snapshots.append(root)
+
+        windows: dict[int, dict[str, Any]] = {}
+        reached_type = None
+        for snap in snapshots:
+            reached_type = reached_type or snap.get("rateLimitReachedType")
+            for slot in ("primary", "secondary"):
+                item = snap.get(slot)
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    duration = int(item.get("windowDurationMins"))
+                except Exception:
+                    continue
+                if duration in windows:
+                    continue
+                rec = window_record(item.get("usedPercent"), unix_to_iso(item.get("resetsAt")), duration)
+                if rec:
+                    windows[duration] = rec
+
+        five = windows.get(300)
+        weekly = windows.get(10080)
+        hard = bool(reached_type) or bool(five and five["usedPercent"] >= 100)
+        availability = "unavailable" if hard else "available"
+        pool = normalize_pool(
+            source="codex-app-server",
+            observed_at=iso_now(),
+            five_hour=five,
+            weekly=weekly,
+            hard_cap=hard,
+            availability=availability,
+            contract_stability="supported",
+        )
+        # Keep the selected binary visible for diagnosis without leaking auth.
+        pool["adapterBinary"] = codex
+        if five is None:
+            pool["error"] = "Codex responded, but no 300-minute rate-limit window was present"
+        return pool
+    finally:
+        try:
+            if proc.stdin:
+                proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            proc.terminate()
+            proc.wait(timeout=1)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+
+
+def _muse_free_unknown(reason: str) -> dict[str, Any]:
+    observed = iso_now()
+    fresh, age = freshness(observed)
+    return {
+        "kind": "empiricalDailyRequestCounter",
+        "availability": "unknown",
+        "source": "opencode-db",
+        "contractStability": "empirical",
+        "observedAt": observed,
+        "freshness": fresh,
+        "ageSeconds": age,
+        "pressureState": "UNKNOWN",
+        "hardCap": False,
+        "fiveHour": None,
+        "weekly": None,
+        "error": reason,
+        "successfulRequestsToday": None,
+        "assistantRowsToday": None,
+        "zeroTokenUnfinishedToday": None,
+        "estimatedDailyLimit": MUSE_FREE_ESTIMATED_DAILY_LIMIT,
+        "remainingEstimate": None,
+        "resetAt": None,
+        "limitBasis": "empirical-2026-09-03",
+        "museFreeState": "UNKNOWN",
+    }
+
+
+def run_muse_free_adapter() -> dict[str, Any]:
+    """Count successful Muse Free responses since UTC midnight, read-only.
+
+    This is local empirical telemetry, not provider-authoritative quota data.
+    It does not create an inference request and does not treat unfinished
+    zero-token placeholders alone as proof of a server-side hard cap.
+    """
+    import sqlite3
+
+    if not OPENCODE_DB_PATH.is_file():
+        return _muse_free_unknown("OpenCode database not found")
+
+    now = now_utc()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + dt.timedelta(days=1)
+    start_ms = int(start.timestamp() * 1000)
+    end_ms = int(end.timestamp() * 1000)
+
+    assistant_rows = 0
+    successful = 0
+    zero_unfinished = 0
+
+    try:
+        uri = f"file:{OPENCODE_DB_PATH}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=3)
+        try:
+            rows = conn.execute(
+                """
+                SELECT data
+                FROM message
+                WHERE time_created >= ?
+                  AND time_created < ?
+                """,
+                (start_ms, end_ms),
+            )
+
+            for (raw,) in rows:
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    continue
+
+                if not isinstance(data, dict):
+                    continue
+                if data.get("role") != "assistant":
+                    continue
+                if data.get("modelID") != MUSE_FREE_MODEL_ID:
+                    continue
+
+                assistant_rows += 1
+
+                tokens = data.get("tokens")
+                total_tokens = 0.0
+                if isinstance(tokens, dict):
+                    for key in ("input", "output", "reasoning"):
+                        try:
+                            total_tokens += float(tokens.get(key) or 0)
+                        except Exception:
+                            pass
+
+                finish = data.get("finish")
+                if finish is not None and total_tokens > 0:
+                    successful += 1
+                elif finish is None and total_tokens == 0:
+                    zero_unfinished += 1
+        finally:
+            conn.close()
+    except Exception as exc:
+        return _muse_free_unknown(
+            f"OpenCode DB read failed: {type(exc).__name__}"
+        )
+
+    remaining = max(0, MUSE_FREE_ESTIMATED_DAILY_LIMIT - successful)
+
+    if successful >= MUSE_FREE_HANDOFF_READY:
+        muse_state = "HANDOFF_READY"
+    elif successful >= MUSE_FREE_NEAR_CAP:
+        muse_state = "NEAR_CAP"
+    else:
+        muse_state = "NORMAL"
+
+    observed = iso_now()
+    fresh, age = freshness(observed)
+
+    return {
+        "kind": "empiricalDailyRequestCounter",
+        "availability": "available",
+        "source": "opencode-db",
+        "contractStability": "empirical",
+        "observedAt": observed,
+        "freshness": fresh,
+        "ageSeconds": age,
+        "pressureState": muse_state,
+        "hardCap": False,
+        "fiveHour": None,
+        "weekly": None,
+        "error": None,
+        "successfulRequestsToday": successful,
+        "assistantRowsToday": assistant_rows,
+        "zeroTokenUnfinishedToday": zero_unfinished,
+        "estimatedDailyLimit": MUSE_FREE_ESTIMATED_DAILY_LIMIT,
+        "remainingEstimate": remaining,
+        "resetAt": end.isoformat(),
+        "limitBasis": "empirical-2026-09-03",
+        "museFreeState": muse_state,
+    }
+
+
+def opencode_go_api_key() -> tuple[str | None, str]:
+    """Read the existing OpenCode Go key without printing or persisting it."""
+    env_key = os.environ.get("OPENCODE_GO_API_KEY")
+    if env_key:
+        return env_key, "env"
+
+    try:
+        data = json.loads(OPENCODE_AUTH_PATH.read_text())
+    except Exception:
+        return None, "none"
+
+    if not isinstance(data, dict):
+        return None, "none"
+
+    record = data.get("opencode-go")
+    if not isinstance(record, dict):
+        return None, "none"
+
+    key = record.get("key")
+    if isinstance(key, str) and key:
+        return key, "opencode-auth"
+
+    return None, "none"
+
+
+def run_opencode_go_adapter(timeout: int = 12) -> dict[str, Any]:
+    """Read official OpenCode Go rolling/weekly/monthly usage telemetry."""
+    key, key_source = opencode_go_api_key()
+    if not key:
+        return unknown_pool("OpenCode Go API key unavailable")
+
+    request = urllib.request.Request(
+        OPENCODE_GO_USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Accept": "application/json",
+            "User-Agent": "superset-auto-quota/1.2",
+        },
+        method="GET",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+        data = json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        return unknown_pool(f"OpenCode Go usage endpoint HTTP {exc.code}")
+    except Exception as exc:
+        return unknown_pool(
+            f"OpenCode Go usage query failed: {type(exc).__name__}"
+        )
+
+    usage = data.get("usage") if isinstance(data, dict) else None
+    if not isinstance(usage, dict):
+        return unknown_pool("OpenCode Go usage response missing `usage`")
+
+    rolling_raw = usage.get("rolling")
+    weekly_raw = usage.get("weekly")
+    monthly_raw = usage.get("monthly")
+
+    rolling = None
+    weekly = None
+    monthly = None
+    statuses: dict[str, str | None] = {}
+
+    if isinstance(rolling_raw, dict):
+        rolling = window_record(
+            rolling_raw.get("percent"),
+            rolling_raw.get("resetsAt"),
+            300,
+        )
+        statuses["rolling"] = (
+            str(rolling_raw.get("status"))
+            if rolling_raw.get("status") is not None
+            else None
+        )
+    else:
+        statuses["rolling"] = None
+
+    if isinstance(weekly_raw, dict):
+        weekly = window_record(
+            weekly_raw.get("percent"),
+            weekly_raw.get("resetsAt"),
+            10080,
+        )
+        statuses["weekly"] = (
+            str(weekly_raw.get("status"))
+            if weekly_raw.get("status") is not None
+            else None
+        )
+    else:
+        statuses["weekly"] = None
+
+    if isinstance(monthly_raw, dict):
+        monthly = window_record(
+            monthly_raw.get("percent"),
+            monthly_raw.get("resetsAt"),
+            None,
+        )
+        statuses["monthly"] = (
+            str(monthly_raw.get("status"))
+            if monthly_raw.get("status") is not None
+            else None
+        )
+    else:
+        statuses["monthly"] = None
+
+    records_complete = all(
+        item is not None for item in (rolling, weekly, monthly)
+    )
+    statuses_ok = all(
+        isinstance(statuses.get(name), str)
+        and statuses[name].lower() == "ok"
+        for name in ("rolling", "weekly", "monthly")
+    )
+
+    percent_cap = any(
+        rec is not None and rec.get("usedPercent", 0) >= 100
+        for rec in (rolling, weekly, monthly)
+    )
+
+    non_ok_status = any(
+        isinstance(value, str) and value.lower() != "ok"
+        for value in statuses.values()
+    )
+
+    hard = percent_cap or non_ok_status
+
+    if hard:
+        availability = "unavailable"
+    elif records_complete and statuses_ok:
+        availability = "available"
+    else:
+        availability = "unknown"
+
+    pool = normalize_pool(
+        source="opencode-go-usage-api",
+        observed_at=iso_now(),
+        five_hour=rolling,
+        weekly=weekly,
+        hard_cap=hard,
+        availability=availability,
+        error=None if availability != "unknown"
+        else "OpenCode Go usage response incomplete or status unknown",
+        contract_stability="supported",
+    )
+
+    # The normalized v1 pool schema predates monthly windows. Keep fiveHour and
+    # weekly compatible and add monthly/status fields additively.
+    pool["monthly"] = monthly
+    pool["apiStatus"] = statuses
+    pool["credentialSource"] = key_source
+
+    remaining_by_window = {}
+    for name, rec in (
+        ("fiveHour", rolling),
+        ("weekly", weekly),
+        ("monthly", monthly),
+    ):
+        if isinstance(rec, dict) and rec.get("remainingPercent") is not None:
+            try:
+                remaining_by_window[name] = float(rec["remainingPercent"])
+            except Exception:
+                pass
+
+    reserve_floor = 5.0
+    limiting_window = None
+    minimum_remaining = None
+
+    if remaining_by_window:
+        limiting_window, minimum_remaining = min(
+            remaining_by_window.items(),
+            key=lambda item: item[1],
+        )
+
+    reserve_safe = bool(
+        availability == "available"
+        and statuses_ok
+        and minimum_remaining is not None
+        and minimum_remaining > reserve_floor
+    )
+
+    pool["reserveFloorPercent"] = reserve_floor
+    pool["reserveSafe"] = reserve_safe
+    pool["minimumRemainingPercent"] = minimum_remaining
+    pool["limitingWindow"] = limiting_window
+
+    if availability == "available" and not reserve_safe:
+        pool["pressureState"] = "PRESERVE_FINAL_FLOOR"
+
+    return pool
+
+
+
+def _decode_jwt_payload(token: str) -> dict[str, Any] | None:
+    """Decode JWT payload without validating the signature (identity extraction only)."""
+    import base64
+
+    try:
+        payload = token.split(".", 2)[1]
+        payload += "=" * (-len(payload) % 4)
+        raw = base64.urlsafe_b64decode(payload.encode("ascii"))
+        obj = json.loads(raw.decode("utf-8"))
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+def _cursor_cli_version() -> str:
+    """Best-effort CLI version for the provider User-Agent; never creates inference."""
+    agent = shutil.which("cursor-agent")
+    if not agent:
+        return "2026.07.07"
+    try:
+        cp = subprocess.run(
+            [agent, "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        value = (cp.stdout or "").strip().splitlines()[0].strip() if cp.stdout else ""
+        return value or "2026.07.07"
+    except Exception:
+        return "2026.07.07"
+
+
+def _cursor_access_token() -> tuple[str | None, str]:
+    """Read Cursor-owned credentials read-only; never refresh or persist them."""
+    env = os.environ.get("CURSOR_SESSION_TOKEN") or os.environ.get("CURSOR_ACCESS_TOKEN")
+    if env:
+        value = env.strip()
+        if "%3A%3A" in value:
+            value = value.split("%3A%3A", 1)[1]
+        elif "::" in value:
+            value = value.split("::", 1)[1]
+        return (value or None), "env"
+
+    override = os.environ.get("SUPERSET_AUTO_CURSOR_AUTH") or os.environ.get("CURSOR_AUTH_PATH")
+    paths = [Path(override).expanduser()] if override else list(CURSOR_CLI_AUTH_PATHS)
+    for path in paths:
+        try:
+            obj = json.loads(path.read_text())
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            value = obj.get("accessToken")
+            if isinstance(value, str) and value:
+                return value, f"cursor-cli-auth:{path}"
+
+    # Cursor IDE fallback on macOS. Open read-only through Python sqlite so no
+    # external sqlite3 binary or shell interpolation is required.
+    try:
+        import sqlite3
+
+        uri = f"file:{CURSOR_IDE_STATE_DB}?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=1)
+        try:
+            row = con.execute(
+                "SELECT value FROM ItemTable WHERE key='cursorAuth/accessToken' LIMIT 1"
+            ).fetchone()
+        finally:
+            con.close()
+        if row and isinstance(row[0], str) and row[0]:
+            return row[0], f"cursor-ide-db:{CURSOR_IDE_STATE_DB}"
+    except Exception:
+        pass
+
+    return None, "none"
+
+
+def _cursor_cookie(access_token: str) -> tuple[str | None, str | None]:
+    claims = _decode_jwt_payload(access_token)
+    if not claims:
+        return None, "Cursor access token is not a readable JWT"
+    sub = claims.get("sub")
+    if not isinstance(sub, str) or not sub:
+        return None, "Cursor access token is missing JWT sub"
+    uid = sub.rsplit("|", 1)[-1]
+    if not uid:
+        return None, "Cursor JWT sub did not contain a user id"
+    exp = claims.get("exp")
+    if isinstance(exp, (int, float)) and exp > 0 and exp <= time.time():
+        return None, "Cursor login expired; run cursor-agent login"
+    return f"WorkosCursorSessionToken={uid}%3A%3A{access_token}", None
+
+
+def _cursor_monthly_pool(
+    *,
+    used: Any,
+    reset_at: str | None,
+    observed_at: str,
+    auth_source: str,
+    pool_kind: str,
+    billing_start: str | None,
+    membership_type: str | None,
+    is_unlimited: bool,
+    on_demand_enabled: bool,
+) -> dict[str, Any]:
+    monthly = window_record(used, reset_at, None)
+    used_pct = monthly.get("usedPercent") if isinstance(monthly, dict) else None
+    hard = bool(not is_unlimited and used_pct is not None and used_pct >= 100)
+    availability = "unavailable" if hard else ("available" if monthly else "unknown")
+    pool = normalize_pool(
+        source="cursor-usage-summary",
+        observed_at=observed_at,
+        five_hour=None,
+        weekly=None,
+        hard_cap=hard,
+        availability=availability,
+        error=None if monthly else f"Cursor usage summary missing {pool_kind} percentage",
+        contract_stability="provider-internal-undocumented",
+    )
+    pool["monthly"] = monthly
+    pool["billingCycleStart"] = billing_start
+    pool["billingCycleEnd"] = reset_at
+    pool["membershipType"] = membership_type
+    pool["cursorPool"] = pool_kind
+    pool["credentialSource"] = auth_source
+    pool["isUnlimited"] = is_unlimited
+    pool["onDemandEnabled"] = on_demand_enabled
+    pool["reserveFloorPercent"] = 5.0
+    pool["reserveSafe"] = bool(
+        availability == "available"
+        and isinstance(monthly, dict)
+        and float(monthly.get("remainingPercent", 0)) > 5.0
+    )
+    pool["pressureState"] = pressure_state(used_pct, hard, availability)
+    return pool
+
+
+def run_cursor_adapter(timeout: int = 12) -> dict[str, dict[str, Any]]:
+    """Read Cursor's monthly included-use pools without creating a model turn."""
+    access_token, auth_source = _cursor_access_token()
+    if not access_token:
+        reason = "Cursor login unavailable; run cursor-agent login"
+        return {
+            "cursor": unknown_pool(reason),
+            "cursorModels": unknown_pool(reason),
+            "cursorOtherModels": unknown_pool(reason),
+        }
+
+    cookie, cookie_error = _cursor_cookie(access_token)
+    if not cookie:
+        reason = cookie_error or "Cursor session unavailable"
+        return {
+            "cursor": unknown_pool(reason),
+            "cursorModels": unknown_pool(reason),
+            "cursorOtherModels": unknown_pool(reason),
+        }
+
+    request = urllib.request.Request(
+        os.environ.get("SUPERSET_AUTO_CURSOR_USAGE_URL", CURSOR_USAGE_URL),
+        headers={
+            "Cookie": cookie,
+            "Accept": "application/json",
+            "User-Agent": f"cursor-agent/{_cursor_cli_version()}",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+        data = json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            reason = "Cursor session rejected; run cursor-agent login"
+        else:
+            reason = f"Cursor usage endpoint HTTP {exc.code}"
+        return {
+            "cursor": unknown_pool(reason),
+            "cursorModels": unknown_pool(reason),
+            "cursorOtherModels": unknown_pool(reason),
+        }
+    except Exception as exc:
+        reason = f"Cursor usage query failed: {type(exc).__name__}"
+        return {
+            "cursor": unknown_pool(reason),
+            "cursorModels": unknown_pool(reason),
+            "cursorOtherModels": unknown_pool(reason),
+        }
+
+    if not isinstance(data, dict):
+        reason = "Cursor usage response was not an object"
+        return {
+            "cursor": unknown_pool(reason),
+            "cursorModels": unknown_pool(reason),
+            "cursorOtherModels": unknown_pool(reason),
+        }
+
+    individual = data.get("individualUsage")
+    plan = individual.get("plan") if isinstance(individual, dict) else None
+    on_demand = individual.get("onDemand") if isinstance(individual, dict) else None
+    if not isinstance(plan, dict):
+        reason = "Cursor usage response missing individualUsage.plan"
+        return {
+            "cursor": unknown_pool(reason),
+            "cursorModels": unknown_pool(reason),
+            "cursorOtherModels": unknown_pool(reason),
+        }
+
+    observed = iso_now()
+    reset_at = data.get("billingCycleEnd") if isinstance(data.get("billingCycleEnd"), str) else None
+    start_at = data.get("billingCycleStart") if isinstance(data.get("billingCycleStart"), str) else None
+    membership = data.get("membershipType") if isinstance(data.get("membershipType"), str) else None
+    is_unlimited = bool(data.get("isUnlimited", False))
+    on_demand_enabled = bool(isinstance(on_demand, dict) and on_demand.get("enabled") is True)
+
+    common = dict(
+        reset_at=reset_at,
+        observed_at=observed,
+        auth_source=auth_source,
+        billing_start=start_at,
+        membership_type=membership,
+        is_unlimited=is_unlimited,
+        on_demand_enabled=on_demand_enabled,
+    )
+    total = _cursor_monthly_pool(
+        used=plan.get("totalPercentUsed"),
+        pool_kind="total",
+        **common,
+    )
+    models = _cursor_monthly_pool(
+        used=plan.get("autoPercentUsed"),
+        pool_kind="cursor-models",
+        **common,
+    )
+    other = _cursor_monthly_pool(
+        used=plan.get("apiPercentUsed"),
+        pool_kind="other-models",
+        **common,
+    )
+    return {"cursor": total, "cursorModels": models, "cursorOtherModels": other}
+
+def _read_json_token(blob: str) -> str | None:
+    try:
+        data = json.loads(blob)
+    except Exception:
+        return None
+    oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    if isinstance(oauth, dict):
+        token = oauth.get("accessToken")
+        if isinstance(token, str) and token:
+            return token
+    return None
+
+
+def claude_access_token(allow_keychain: bool) -> tuple[str | None, str]:
+    for env_name in (
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_SESSION_ACCESS_TOKEN",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_ACCESS_TOKEN",
+    ):
+        value = os.environ.get(env_name)
+        if value:
+            return value, f"env:{env_name}"
+
+    candidates = []
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if config_dir:
+        candidates.append(Path(config_dir) / ".credentials.json")
+    candidates.extend(
+        [
+            Path.home() / ".claude" / ".credentials.json",
+            Path.home() / ".config" / "claude" / ".credentials.json",
+        ]
+    )
+    for path in candidates:
+        try:
+            if path.is_file():
+                token = _read_json_token(path.read_text())
+                if token:
+                    return token, f"file:{path}"
+        except Exception:
+            pass
+
+    if allow_keychain and sys.platform == "darwin" and shutil.which("security"):
+        attempts = [
+            ("Claude Code-credentials", getpass.getuser()),
+            ("Claude Safe Storage", "Claude Key"),
+        ]
+        for service, account in attempts:
+            try:
+                cp = subprocess.run(
+                    ["security", "find-generic-password", "-s", service, "-a", account, "-w"],
+                    text=True,
+                    capture_output=True,
+                    timeout=8,
+                )
+            except Exception:
+                continue
+            if cp.returncode == 0 and cp.stdout.strip():
+                token = _read_json_token(cp.stdout.strip())
+                if token:
+                    return token, f"keychain:{service}"
+                # Some storage variants may contain the token directly.
+                direct = cp.stdout.strip()
+                if direct.startswith("sk-ant-"):
+                    return direct, f"keychain:{service}"
+    return None, "none"
+
+
+def _short_http_error_body(exc: urllib.error.HTTPError) -> str | None:
+    try:
+        raw = exc.read(8192).decode("utf-8", errors="replace").strip()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return " ".join(raw.split())[:500]
+    if not isinstance(data, dict):
+        return None
+    err = data.get("error")
+    if isinstance(err, dict):
+        for key in ("message", "type"):
+            value = err.get(key)
+            if isinstance(value, str) and value.strip():
+                return " ".join(value.split())[:500]
+    for key in ("message", "detail"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split())[:500]
+    return None
+
+
+def _retry_after_at(value: str | None) -> str | None:
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        seconds = max(0.0, float(value))
+        return (now_utc() + dt.timedelta(seconds=seconds)).isoformat()
+    except Exception:
+        pass
+    try:
+        parsed = email.utils.parsedate_to_datetime(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        return parsed.astimezone(dt.timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def _claude_error_pool(
+    *,
+    reason: str,
+    token_source: str,
+    http_status: int | None = None,
+    retry_after: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    pool = normalize_pool(
+        source="anthropic-oauth-usage-error",
+        observed_at=iso_now(),
+        five_hour=None,
+        weekly=None,
+        availability="unknown",
+        error=reason,
+        contract_stability="implementation-sensitive",
+    )
+    pool["credentialSource"] = token_source
+    pool["httpStatus"] = http_status
+    pool["rateLimited"] = http_status == 429
+    pool["retryAfter"] = retry_after
+    retry_after_at = _retry_after_at(retry_after)
+    backoff_basis = "retry-after" if retry_after_at else None
+    if http_status == 429 and retry_after_at is None:
+        retry_after_at = (now_utc() + dt.timedelta(seconds=DEFAULT_TTL)).isoformat()
+        backoff_basis = f"default-{DEFAULT_TTL}s"
+    pool["retryAfterAt"] = retry_after_at
+    pool["backoffBasis"] = backoff_basis
+    pool["requestId"] = request_id
+    return pool
+
+
+def _claude_last_known(old_rec: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(old_rec, dict):
+        return None
+    existing = old_rec.get("lastKnown")
+    if isinstance(existing, dict):
+        return json.loads(json.dumps(existing))
+    five = old_rec.get("fiveHour")
+    weekly = old_rec.get("weekly")
+    observed = old_rec.get("observedAt")
+    if five is None and weekly is None:
+        return None
+    return {
+        "observedAt": observed,
+        "source": old_rec.get("source", "unknown"),
+        "freshness": old_rec.get("freshness", "unknown"),
+        "ageSeconds": old_rec.get("ageSeconds"),
+        "fiveHour": json.loads(json.dumps(five)),
+        "weekly": json.loads(json.dumps(weekly)),
+    }
+
+
+def _claude_backoff_active(old_rec: dict[str, Any] | None) -> bool:
+    if not isinstance(old_rec, dict) or old_rec.get("rateLimited") is not True:
+        return False
+    retry_at = parse_iso(old_rec.get("retryAfterAt"))
+    return bool(retry_at and retry_at > now_utc())
+
+
+def run_claude_adapter(timeout: int = 12, allow_keychain: bool = True) -> dict[str, Any]:
+    token, token_source = claude_access_token(allow_keychain)
+    if not token:
+        return _claude_error_pool(
+            reason="Claude OAuth credential unavailable to read-only helper",
+            token_source=token_source,
+        )
+
+    request = urllib.request.Request(
+        CLAUDE_USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "anthropic-beta": "oauth-2025-04-20",
+            "Accept": "application/json",
+            "User-Agent": "superset-auto-quota/1.0",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+        data = json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        # Never attempt credential refresh here; Claude Code owns token rotation.
+        body = _short_http_error_body(exc)
+        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        request_id = None
+        if exc.headers:
+            request_id = exc.headers.get("request-id") or exc.headers.get("x-request-id")
+        detail = f"; {body}" if body else ""
+        reason = (
+            f"Claude usage endpoint HTTP {exc.code}{detail}; "
+            f"credential source {token_source}"
+        )
+        return _claude_error_pool(
+            reason=reason,
+            token_source=token_source,
+            http_status=int(exc.code),
+            retry_after=retry_after,
+            request_id=request_id,
+        )
+    except Exception as exc:
+        return _claude_error_pool(
+            reason=f"Claude usage query failed: {type(exc).__name__}",
+            token_source=token_source,
+        )
+
+    five_raw = data.get("five_hour") if isinstance(data, dict) else None
+    week_raw = data.get("seven_day") if isinstance(data, dict) else None
+    five = None
+    weekly = None
+    if isinstance(five_raw, dict):
+        five = window_record(five_raw.get("utilization"), five_raw.get("resets_at"), 300)
+    if isinstance(week_raw, dict):
+        weekly = window_record(week_raw.get("utilization"), week_raw.get("resets_at"), 10080)
+    hard = bool(five and five["usedPercent"] >= 100)
+    pool = normalize_pool(
+        source="anthropic-oauth-usage",
+        observed_at=iso_now(),
+        five_hour=five,
+        weekly=weekly,
+        hard_cap=hard,
+        availability="unavailable" if hard else "available",
+        contract_stability="implementation-sensitive",
+    )
+    pool["credentialSource"] = token_source
+    pool["httpStatus"] = 200
+    pool["rateLimited"] = False
+    pool["retryAfter"] = None
+    pool["retryAfterAt"] = None
+    pool["backoffBasis"] = None
+    pool["requestId"] = None
+    return pool
+
+
+
+def _resolve_agy_binary() -> str | None:
+    for env_name in ("SUPERSET_AUTO_AGY_BIN", "AUTO_AGY_BIN"):
+        value = os.environ.get(env_name)
+        if value and Path(value).is_file() and os.access(value, os.X_OK):
+            return value
+    return shutil.which("agy")
+
+
+def _parse_json_stdout(blob: str) -> dict[str, Any] | None:
+    try:
+        obj = json.loads(blob)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        pass
+    # Be tolerant of a launcher that writes a harmless line before the JSON.
+    for line in reversed(blob.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+def _find_antigravity_groups(obj: Any) -> list[dict[str, Any]] | None:
+    if isinstance(obj, dict):
+        groups = obj.get("groups")
+        if isinstance(groups, list) and any(
+            isinstance(group, dict) and isinstance(group.get("buckets"), list)
+            for group in groups
+        ):
+            return [group for group in groups if isinstance(group, dict)]
+        for value in obj.values():
+            found = _find_antigravity_groups(value)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for value in obj:
+            found = _find_antigravity_groups(value)
+            if found:
+                return found
+    return None
+
+
+def _fraction(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except Exception:
+        return None
+    # Official Antigravity quota JSON uses 0..1 fractions. Accept percentages
+    # defensively so a cosmetic upstream representation change does not invert
+    # quota accounting.
+    if out > 1.0 and out <= 100.0:
+        out /= 100.0
+    if out < 0.0 or out > 1.0:
+        return None
+    return out
+
+
+def _agy_window(bucket: dict[str, Any], minutes: int) -> dict[str, Any] | None:
+    remaining = _fraction(
+        bucket.get("remaining_fraction", bucket.get("remainingFraction"))
+    )
+    if remaining is None:
+        return None
+    used = (1.0 - remaining) * 100.0
+    reset = bucket.get("reset_time", bucket.get("resetTime"))
+    return window_record(used, str(reset) if reset else None, minutes)
+
+
+def _agy_group_kind(group: dict[str, Any]) -> str | None:
+    buckets = group.get("buckets") if isinstance(group.get("buckets"), list) else []
+    ids = {
+        str(bucket.get("id") or "").lower()
+        for bucket in buckets
+        if isinstance(bucket, dict)
+    }
+    if any(item.startswith("gemini-") for item in ids):
+        return "gemini"
+    if any(item.startswith("3p-") for item in ids):
+        return "claude_gpt"
+    label = " ".join(
+        str(group.get(key) or "") for key in ("name", "label", "title", "id")
+    ).lower()
+    if "gemini" in label:
+        return "gemini"
+    if "claude" in label or "gpt" in label or "third" in label:
+        return "claude_gpt"
+    return None
+
+
+def _normalize_agy_group(
+    group: dict[str, Any], *, source: str, observed_at: str, agy_binary: str
+) -> dict[str, Any]:
+    buckets = group.get("buckets") if isinstance(group.get("buckets"), list) else []
+    five = None
+    weekly = None
+    for raw in buckets:
+        if not isinstance(raw, dict):
+            continue
+        bucket_id = str(raw.get("id") or "").lower()
+        window = str(raw.get("window") or "").lower()
+        if window in {"5h", "five_hour", "five-hour"} or bucket_id.endswith("-5h"):
+            five = _agy_window(raw, 300)
+        elif window in {"weekly", "7d", "seven_day", "seven-day"} or bucket_id.endswith("-weekly"):
+            weekly = _agy_window(raw, 10080)
+
+    complete = five is not None and weekly is not None
+    hard = bool(
+        (five and five.get("remainingPercent", 100) <= 0)
+        or (weekly and weekly.get("remainingPercent", 100) <= 0)
+    )
+    availability = "unavailable" if hard else ("available" if complete else "unknown")
+    pool = normalize_pool(
+        source=source,
+        observed_at=observed_at,
+        five_hour=five,
+        weekly=weekly,
+        hard_cap=hard,
+        availability=availability,
+        error=None if availability != "unknown" else "Antigravity quota group missing 5-hour or weekly bucket",
+        contract_stability="supported",
+    )
+    pool["adapterBinary"] = agy_binary
+    pool["groupName"] = next(
+        (str(group.get(key)) for key in ("name", "label", "title", "id") if group.get(key)),
+        None,
+    )
+    pool["quotaCommand"] = "agy -p /quota --output-format json"
+    return pool
+
+
+def run_antigravity_adapter(timeout: int = 12) -> dict[str, dict[str, Any]]:
+    """Read both Antigravity quota pools through agy's official print-mode /quota.
+
+    This path is read-only and does not create a model turn when an existing
+    Antigravity CLI login is present. We run from a private temporary cwd so
+    repository-local instructions/plugins are not discovered merely to read
+    quota. Authentication remains entirely under the user's existing HOME.
+    """
+    agy = _resolve_agy_binary()
+    if not agy:
+        reason = "agy executable not found"
+        return {
+            "antigravityGemini": unknown_pool(reason),
+            "antigravityClaudeGpt": unknown_pool(reason),
+        }
+
+    env = os.environ.copy()
+    env.setdefault("NO_COLOR", "1")
+    try:
+        with tempfile.TemporaryDirectory(prefix="superset-auto-agy-quota-") as cwd:
+            cp = subprocess.run(
+                [agy, "-p", "/quota", "--output-format", "json"],
+                cwd=cwd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+    except subprocess.TimeoutExpired:
+        reason = f"Antigravity quota query timed out after {timeout}s"
+        return {
+            "antigravityGemini": unknown_pool(reason),
+            "antigravityClaudeGpt": unknown_pool(reason),
+        }
+    except Exception as exc:
+        reason = f"Antigravity quota query failed: {type(exc).__name__}"
+        return {
+            "antigravityGemini": unknown_pool(reason),
+            "antigravityClaudeGpt": unknown_pool(reason),
+        }
+
+    if cp.returncode != 0:
+        detail = (cp.stderr or "").strip().splitlines()[-1:]
+        suffix = f": {detail[0][:180]}" if detail else ""
+        reason = f"agy /quota exited {cp.returncode}{suffix}"
+        return {
+            "antigravityGemini": unknown_pool(reason),
+            "antigravityClaudeGpt": unknown_pool(reason),
+        }
+
+    payload = _parse_json_stdout(cp.stdout)
+    groups = _find_antigravity_groups(payload) if payload else None
+    if not groups:
+        reason = "agy /quota JSON did not contain quota groups"
+        return {
+            "antigravityGemini": unknown_pool(reason),
+            "antigravityClaudeGpt": unknown_pool(reason),
+        }
+
+    observed = iso_now()
+    out: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        kind = _agy_group_kind(group)
+        if kind == "gemini":
+            out["antigravityGemini"] = _normalize_agy_group(
+                group, source="antigravity-agy-quota", observed_at=observed, agy_binary=agy
+            )
+        elif kind == "claude_gpt":
+            out["antigravityClaudeGpt"] = _normalize_agy_group(
+                group, source="antigravity-agy-quota", observed_at=observed, agy_binary=agy
+            )
+
+    out.setdefault(
+        "antigravityGemini",
+        unknown_pool("agy /quota did not expose the Gemini Models quota group"),
+    )
+    out.setdefault(
+        "antigravityClaudeGpt",
+        unknown_pool("agy /quota did not expose the Claude and GPT Models quota group"),
+    )
+    return out
+
+def load_json(path: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def write_cache(snapshot: dict[str, Any]) -> None:
+    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CACHE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
+    try:
+        os.chmod(tmp, 0o600)
+    except Exception:
+        pass
+    tmp.replace(CACHE_PATH)
+
+
+def cache_age(snapshot: dict[str, Any] | None) -> int | None:
+    if not snapshot:
+        return None
+    checked = parse_iso(snapshot.get("checkedAt"))
+    if not checked:
+        return None
+    return max(0, int((now_utc() - checked).total_seconds()))
+
+
+def refresh_freshness(snapshot: dict[str, Any]) -> dict[str, Any]:
+    snapshot = json.loads(json.dumps(snapshot))
+    for pool_name, pool in (snapshot.get("pools") or {}).items():
+        if not isinstance(pool, dict):
+            continue
+
+        # Migrate pre-v9.8.17 Claude failure-cache records in-memory. Older
+        # versions copied stale quota windows into source=cache while leaving
+        # availability=available. Even before the next live refresh, never show
+        # those values as current routing-authoritative Claude telemetry.
+        if (
+            pool_name == "claude"
+            and pool.get("source") == "cache"
+            and isinstance(pool.get("error"), str)
+            and pool.get("error")
+        ):
+            last_known = _claude_last_known(pool)
+            if last_known is not None:
+                pool["lastKnown"] = last_known
+            pool["source"] = "anthropic-oauth-usage-error"
+            pool["availability"] = "unknown"
+            pool["pressureState"] = "UNKNOWN"
+            pool["hardCap"] = False
+            pool["fiveHour"] = None
+            pool["weekly"] = None
+
+        fresh, age = freshness(pool.get("observedAt"))
+        pool["freshness"] = fresh
+        pool["ageSeconds"] = age
+
+        if pool.get("kind") == "empiricalDailyRequestCounter":
+            pool["pressureState"] = pool.get("museFreeState", "UNKNOWN")
+            continue
+
+        five = pool.get("fiveHour") or {}
+        monthly = pool.get("monthly") or {}
+        if isinstance(five, dict) and five.get("usedPercent") is not None:
+            used = five.get("usedPercent")
+        elif isinstance(monthly, dict):
+            used = monthly.get("usedPercent")
+        else:
+            used = None
+        pool["pressureState"] = pressure_state(
+            used,
+            bool(pool.get("hardCap")),
+            str(pool.get("availability", "unknown")),
+        )
+    snapshot["servedAt"] = iso_now()
+    return snapshot
+
+
+def merge_extra(pools: dict[str, Any]) -> None:
+    extra = load_json(EXTRA_PATH)
+    if not extra:
+        return
+    incoming = extra.get("pools") if isinstance(extra.get("pools"), dict) else extra
+    if not isinstance(incoming, dict):
+        return
+    for name, value in incoming.items():
+        if name in {"codex", "claude", "museFree", "opencodeGo", "antigravityGemini", "antigravityClaudeGpt", "cursor", "cursorModels", "cursorOtherModels"}:
+            continue
+        if isinstance(value, dict):
+            pools[name] = value
+
+
+def build_snapshot(args: argparse.Namespace, old: dict[str, Any] | None) -> dict[str, Any]:
+    pools: dict[str, Any] = {}
+    old_pools = (old or {}).get("pools") or {}
+
+    if args.no_codex:
+        pools["codex"] = old_pools.get("codex") or unknown_pool("Codex adapter disabled")
+    else:
+        fresh = run_codex_adapter(timeout=args.timeout)
+        if fresh.get("availability") == "unknown" and isinstance(old_pools.get("codex"), dict):
+            old_rec = old_pools["codex"]
+            old_rec = json.loads(json.dumps(old_rec))
+            old_rec["error"] = fresh.get("error")
+            old_rec["source"] = "cache"
+            pools["codex"] = old_rec
+        else:
+            pools["codex"] = fresh
+
+    if args.no_claude:
+        pools["claude"] = old_pools.get("claude") or unknown_pool("Claude adapter disabled")
+    else:
+        old_claude = old_pools.get("claude") if isinstance(old_pools.get("claude"), dict) else None
+        if _claude_backoff_active(old_claude):
+            # Honor Anthropic Retry-After even under --force. A provider-scoped
+            # backoff must not be defeated by unrelated Codex/Muse refreshes.
+            fresh = json.loads(json.dumps(old_claude))
+            fresh = refresh_freshness({"pools": {"claude": fresh}})["pools"]["claude"]
+        else:
+            fresh = run_claude_adapter(
+                timeout=args.timeout,
+                allow_keychain=not args.no_claude_keychain,
+            )
+        if fresh.get("availability") == "unknown":
+            last_known = _claude_last_known(old_claude)
+            if last_known is not None:
+                fresh["lastKnown"] = last_known
+            # Critical v9.8.17 invariant: a failed live Claude read is UNKNOWN.
+            # Never copy stale percentages back into current availability,
+            # pressureState, fiveHour, or weekly fields.
+            fresh["availability"] = "unknown"
+            fresh["pressureState"] = "UNKNOWN"
+            fresh["hardCap"] = False
+            fresh["fiveHour"] = None
+            fresh["weekly"] = None
+        pools["claude"] = fresh
+
+    if args.no_muse_free:
+        pools["museFree"] = old_pools.get("museFree") or _muse_free_unknown(
+            "Muse Free adapter disabled"
+        )
+    else:
+        fresh = run_muse_free_adapter()
+        if (
+            fresh.get("availability") == "unknown"
+            and isinstance(old_pools.get("museFree"), dict)
+        ):
+            old_rec = json.loads(json.dumps(old_pools["museFree"]))
+            old_rec["error"] = fresh.get("error")
+            old_rec["source"] = "cache"
+            pools["museFree"] = old_rec
+        else:
+            pools["museFree"] = fresh
+
+    if args.no_opencode_go:
+        pools["opencodeGo"] = old_pools.get("opencodeGo") or unknown_pool(
+            "OpenCode Go adapter disabled"
+        )
+    else:
+        fresh = run_opencode_go_adapter(timeout=args.timeout)
+        if (
+            fresh.get("availability") == "unknown"
+            and isinstance(old_pools.get("opencodeGo"), dict)
+        ):
+            old_rec = json.loads(json.dumps(old_pools["opencodeGo"]))
+            old_rec["error"] = fresh.get("error")
+            old_rec["source"] = "cache"
+            pools["opencodeGo"] = old_rec
+        else:
+            pools["opencodeGo"] = fresh
+
+    if args.no_antigravity:
+        for name in ("antigravityGemini", "antigravityClaudeGpt"):
+            pools[name] = old_pools.get(name) or unknown_pool("Antigravity adapter disabled")
+    else:
+        fresh_antigravity = run_antigravity_adapter(timeout=args.timeout)
+        for name in ("antigravityGemini", "antigravityClaudeGpt"):
+            fresh = fresh_antigravity.get(name) or unknown_pool("Antigravity adapter returned no pool")
+            if fresh.get("availability") == "unknown" and isinstance(old_pools.get(name), dict):
+                old_rec = json.loads(json.dumps(old_pools[name]))
+                old_rec["error"] = fresh.get("error")
+                old_rec["source"] = "cache"
+                pools[name] = old_rec
+            else:
+                pools[name] = fresh
+
+    if args.no_cursor:
+        for name in ("cursor", "cursorModels", "cursorOtherModels"):
+            pools[name] = old_pools.get(name) or unknown_pool("Cursor adapter disabled")
+    else:
+        fresh_cursor = run_cursor_adapter(timeout=args.timeout)
+        for name in ("cursor", "cursorModels", "cursorOtherModels"):
+            fresh = fresh_cursor.get(name) or unknown_pool("Cursor adapter returned no pool")
+            if fresh.get("availability") == "unknown" and isinstance(old_pools.get(name), dict):
+                old_rec = json.loads(json.dumps(old_pools[name]))
+                old_rec["error"] = fresh.get("error")
+                old_rec["source"] = "cache"
+                pools[name] = old_rec
+            else:
+                pools[name] = fresh
+
+    for name in UNKNOWN_POOLS:
+        pools[name] = old_pools.get(name) or unknown_pool("no built-in read-only adapter configured")
+    merge_extra(pools)
+
+    return refresh_freshness(
+        {
+            "schemaVersion": SCHEMA_VERSION,
+            "checkedAt": iso_now(),
+            "cacheTtlSeconds": args.cache_ttl,
+            "pools": pools,
+        }
+    )
+
+
+def print_summary(snapshot: dict[str, Any]) -> None:
+    print(f"checked: {snapshot.get('checkedAt')}")
+    for name, pool in (snapshot.get("pools") or {}).items():
+        if not isinstance(pool, dict):
+            continue
+
+        if pool.get("kind") == "empiricalDailyRequestCounter":
+            used = pool.get("successfulRequestsToday")
+            limit = pool.get("estimatedDailyLimit")
+            reset = pool.get("resetAt") or "unknown"
+            print(
+                f"{name:24s} requests={used}/{limit}  "
+                f"remaining={pool.get('remainingEstimate')}  "
+                f"state={pool.get('pressureState')}  "
+                f"reset={reset}  source={pool.get('source')}"
+            )
+            continue
+
+        five = pool.get("fiveHour") or {}
+        if isinstance(five, dict) and five.get("usedPercent") is not None:
+            reset = five.get("resetsAt") or "unknown"
+            print(
+                f"{name:24s} used={five.get('usedPercent'):>6}%  "
+                f"remaining={five.get('remainingPercent'):>6}%  "
+                f"state={pool.get('pressureState')}  reset={reset}  source={pool.get('source')}"
+            )
+        else:
+            monthly = pool.get("monthly") or {}
+            if isinstance(monthly, dict) and monthly.get("usedPercent") is not None:
+                reset = monthly.get("resetsAt") or "unknown"
+                print(
+                    f"{name:24s} monthly={monthly.get('usedPercent'):>6}%  "
+                    f"remaining={monthly.get('remainingPercent'):>6}%  "
+                    f"state={pool.get('pressureState')}  reset={reset}  source={pool.get('source')}"
+                )
+            else:
+                print(
+                    f"{name:24s} used=unknown  state={pool.get('pressureState')}  "
+                    f"source={pool.get('source')}  error={pool.get('error') or '-'}"
+                )
+
+
+PUBLIC_PROVIDER_POOLS = {
+    "codex": ("codex",), "claude": ("claude",), "opencode": ("museFree",),
+    "opencode-go": ("opencodeGo",), "antigravity": ("antigravityGemini", "antigravityClaudeGpt"),
+    "cursor": ("cursor", "cursorModels", "cursorOtherModels"),
+}
+
+
+def public_provider_filter(args, old):
+    path = Path.home() / ".superset" / "auto" / "public-settings.json"
+    if not path.exists():
+        return old, set()
+    settings = json.loads(path.read_text())
+    enabled = set(settings["providers"])
+    disabled = set()
+    flags = {"codex": "no_codex", "claude": "no_claude", "opencode": "no_muse_free",
+             "opencode-go": "no_opencode_go", "antigravity": "no_antigravity", "cursor": "no_cursor"}
+    old = json.loads(json.dumps(old)) if old else None
+    for provider, pools in PUBLIC_PROVIDER_POOLS.items():
+        if provider not in enabled:
+            setattr(args, flags[provider], True)
+            disabled.update(pools)
+            if old:
+                for pool in pools:
+                    old.get("pools", {}).pop(pool, None)
+    return old, disabled
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Read-only Superset AUTO quota snapshot")
+    parser.add_argument("--force", action="store_true", help="ignore a fresh cache and query providers now")
+    parser.add_argument("--no-cache-write", action="store_true", help="do not replace the shared quota cache (for provider-scoped gate checks)")
+    parser.add_argument("--json", action="store_true", help="print compact JSON")
+    parser.add_argument("--pretty", action="store_true", help="print indented JSON")
+    parser.add_argument("--summary", action="store_true", help="print a short human-readable summary")
+    parser.add_argument("--cache-ttl", type=int, default=DEFAULT_TTL, help="fresh-cache TTL in seconds (default 300)")
+    parser.add_argument("--timeout", type=int, default=12, help="per-provider timeout in seconds")
+    parser.add_argument("--no-codex", action="store_true")
+    parser.add_argument("--no-claude", action="store_true")
+    parser.add_argument("--no-claude-keychain", action="store_true", help="do not query macOS Keychain for Claude credentials")
+    parser.add_argument("--no-muse-free", action="store_true", help="disable local Muse Free DB telemetry")
+    parser.add_argument("--no-opencode-go", action="store_true", help="disable OpenCode Go usage API telemetry")
+    parser.add_argument("--no-antigravity", action="store_true", help="disable Antigravity agy /quota telemetry")
+    parser.add_argument("--no-cursor", action="store_true", help="disable Cursor monthly usage telemetry")
+    args = parser.parse_args()
+
+    old, disabled = public_provider_filter(args, load_json(CACHE_PATH))
+    age = cache_age(old)
+    if not args.force and old and age is not None and age < max(0, args.cache_ttl):
+        snapshot = refresh_freshness(old)
+    else:
+        snapshot = build_snapshot(args, old)
+        if not args.no_cache_write:
+            write_cache(snapshot)
+
+    # Disabled accounts cannot become eligible through a stale shared cache.
+    for pool in disabled:
+        snapshot.setdefault("pools", {})[pool] = unknown_pool("Provider not enabled in this AUTO installation")
+
+    if args.summary:
+        print_summary(snapshot)
+    elif args.pretty or not args.json:
+        print(json.dumps(snapshot, indent=2, sort_keys=True))
+    else:
+        print(json.dumps(snapshot, separators=(",", ":"), sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

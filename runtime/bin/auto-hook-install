@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Idempotently add the AUTO v9.8.23 lifecycle tap to Superset's managed hook."""
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import shutil
+import stat
+import sys
+import time
+
+MARKER = "SUPERSET_AUTO_LIFECYCLE_TAP_V9823_HOOK"
+MIRROR_MARKER = "SUPERSET_AUTO_COORDINATOR_CONVERSATION_MIRROR_V9823"
+NEEDLE = '[ -z "$EVENT_TYPE" ] && exit 0\n'
+BLOCK = r'''
+# SUPERSET_AUTO_LIFECYCLE_TAP_V9823_HOOK
+# AUTO observes the same already-normalized lifecycle event Superset is about
+# to dispatch. The tap is best-effort and only records registered AUTO workers.
+AUTO_LIFECYCLE_TAP="${SUPERSET_HOME_DIR:-$HOME/.superset}/bin/auto-lifecycle-tap"
+if [ -n "$SUPERSET_WORKSPACE_ID" ] && [ -n "$SUPERSET_TERMINAL_ID" ] && [ -x "$AUTO_LIFECYCLE_TAP" ]; then
+  "$AUTO_LIFECYCLE_TAP" \
+    --workspace "$SUPERSET_WORKSPACE_ID" \
+    --terminal "$SUPERSET_TERMINAL_ID" \
+    --agent "${SUPERSET_AGENT_ID:-}" \
+    --session "${SESSION_ID:-}" \
+    --event "$EVENT_TYPE" \
+    </dev/null >/dev/null 2>&1 || true
+fi
+# END SUPERSET_AUTO_LIFECYCLE_TAP_V9823_HOOK
+'''
+
+
+def main() -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("--check", action="store_true")
+    p.add_argument("--quiet", action="store_true")
+    ns = p.parse_args()
+    home = Path(os.environ.get("SUPERSET_HOME_DIR") or (Path.home() / ".superset"))
+    target = home / "hooks" / "notify.sh"
+    mirror_source = home / "auto" / "runtime" / "auto-coordinator-mirror.js"
+    mirror_target = home / "hooks" / "opencode" / "plugin" / "auto-coordinator-mirror.js"
+    mirror_ok = False
+    if mirror_source.is_file():
+        try:
+            source_text = mirror_source.read_text(encoding="utf-8", errors="strict")
+            current_text = mirror_target.read_text(encoding="utf-8", errors="strict") if mirror_target.is_file() else ""
+            mirror_ok = MIRROR_MARKER in current_text and current_text == source_text
+            if not mirror_ok and not ns.check:
+                mirror_target.parent.mkdir(parents=True, exist_ok=True)
+                tmp_mirror = mirror_target.with_name(mirror_target.name + f".tmp.{os.getpid()}")
+                tmp_mirror.write_text(source_text, encoding="utf-8")
+                os.replace(tmp_mirror, mirror_target)
+                mirror_ok = True
+        except Exception as exc:
+            if not ns.quiet:
+                print(f"AUTO conversation mirror install failed: {exc}", file=sys.stderr)
+    elif not ns.quiet and not ns.check:
+        print(f"AUTO conversation mirror template missing: {mirror_source}", file=sys.stderr)
+
+    if not target.is_file():
+        if not ns.quiet:
+            print(f"AUTO hook tap unavailable: {target} does not exist", file=sys.stderr)
+        return 1
+    text = target.read_text(encoding="utf-8", errors="strict")
+    if MARKER in text:
+        if ns.check:
+            return 0 if mirror_ok else 1
+        if not ns.quiet:
+            print("AUTO lifecycle tap already installed")
+        return 0 if mirror_ok else 2
+    if ns.check:
+        return 1
+    if NEEDLE not in text:
+        if not ns.quiet:
+            print("AUTO hook tap not installed: Superset notify hook shape was not recognized; workspace supervisor will use terminal fallback", file=sys.stderr)
+        return 2
+    tap = home / "bin" / "auto-lifecycle-tap"
+    if not (tap.is_file() and os.access(tap, os.X_OK)):
+        if not ns.quiet:
+            print(f"AUTO hook tap helper is missing or not executable: {tap}", file=sys.stderr)
+        return 2
+    replacement = NEEDLE + BLOCK + "\n"
+    patched = text.replace(NEEDLE, replacement, 1)
+    st = target.stat()
+    backup_dir = home / "auto" / "hook-backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir / f"notify.sh.pre-v9.8.23.{time.strftime('%Y%m%d-%H%M%S')}"
+    shutil.copy2(target, backup)
+    tmp = target.with_name(target.name + f".tmp.{os.getpid()}")
+    tmp.write_text(patched, encoding="utf-8")
+    os.chmod(tmp, stat.S_IMODE(st.st_mode))
+    os.replace(tmp, target)
+    if not ns.quiet:
+        print(f"AUTO lifecycle tap installed in {target}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

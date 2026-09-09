@@ -1,0 +1,43 @@
+#!/bin/bash
+# SUPERSET_AUTO_GUARD_V991_PHASE2_DUAL_PROFILES
+set -euo pipefail
+
+ROUTE_RESOLVER="${SUPERSET_AUTO_ROUTE_RESOLVER:-$HOME/.superset/bin/auto-route-resolve}"
+LABEL="${1:-}"
+
+if [[ -z "$LABEL" ]]; then
+  echo "Usage: auto-agent-id <logical-or-physical agent label>" >&2
+  exit 64
+fi
+
+if [[ "${SUPERSET_MUSE_LEAF:-0}" == "1" ]]; then
+  echo "ERROR: Muse leaf workers may not resolve or dispatch child agents." >&2
+  exit 64
+fi
+
+case "$LABEL" in
+  "AUTO · Coordinator"|"AUTO · Fast Fix"|"AUTO · Feature"|"AUTO Muse Go XHigh"|"AUTO Gemini 3.8 Flash High"|"AUTO Opus 5 High"|"AUTO Terra High"|"AUTO Emergency · Azure Terra")
+    echo "ERROR: Coordinator preset is top-level only and may not be resolved as a child: $LABEL" >&2
+    exit 64
+    ;;
+esac
+
+SETTINGS="$HOME/.superset/auto/public-settings.json"
+if [[ -f "$SETTINGS" ]] && ! jq -e --arg label "$LABEL" '.allowedLabels | index($label) != null' "$SETTINGS" >/dev/null; then
+  echo "ERROR: route is not enabled in this AUTO installation: $LABEL" >&2
+  exit 64
+fi
+
+RESOLVED_LABEL="$LABEL"
+if [[ -x "$ROUTE_RESOLVER" ]] && "$ROUTE_RESOLVER" --exists "$LABEL" >/dev/null 2>&1; then
+  RESOLVED_LABEL="$($ROUTE_RESOLVER --base-label "$LABEL")"
+fi
+
+agents="$(superset agents list --local --json)"
+count="$(printf '%s' "$agents" | jq --arg label "$RESOLVED_LABEL" '[.[] | select(.label == $label)] | length')"
+if [[ "$count" != "1" ]]; then
+  echo "ERROR: expected exactly one launch agent named '$RESOLVED_LABEL' for route '$LABEL'; found $count." >&2
+  exit 66
+fi
+
+printf '%s' "$agents" | jq -r --arg label "$RESOLVED_LABEL" '.[] | select(.label == $label) | .id'

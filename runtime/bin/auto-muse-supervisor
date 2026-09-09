@@ -1,0 +1,1304 @@
+#!/usr/bin/env python3
+"""Resident Muse Free/Go supervisor for Superset AUTO v9.9.4.1 recovery-safe clean chat.
+
+The supervisor stays alive while a Free Muse OpenCode TUI is running. It does
+not create model turns. It identifies the exact OpenCode session and watches
+both persisted assistant errors and OpenCode's own incremental log stream. The
+log path is required because retryable provider errors live in session.status /
+stream state and may not be persisted into message.data.error while OpenCode is
+waiting to retry. On an explicit Free cap, or after one bounded retry of an
+exact-session transient Free rate limit, it verifies live OpenCode Go usage and
+stops the Free TUI. Recovery continues the exact session through OpenCode's verified
+non-interactive Go path, but v9.9.4 never attaches that runner's formatted
+tool transcript directly to a clean Coordinator terminal. Raw recovery output
+is captured to a private diagnostic log while completed user-visible assistant
+text is relayed from the exact Go session. After recovery completes, the exact
+same Go session is reopened in the interactive TUI with clean KV state
+reasserted so Superset keeps a chat surface and the next user message cannot
+fall through to the shell. A bounded activation
+deadline applies only until the exact Go route is
+observed; once that route is proven active, the deadline is permanently
+disarmed and the same recovery process remains under resident cap supervision
+for as long as the AUTO task legitimately needs. This avoids both false
+"Free cap" labelling for transient throttles and the former five-minute
+coordinator self-termination bug.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import sqlite3
+import subprocess
+import sys
+import time
+from collections import deque
+from typing import Any
+
+FREE_CAP_RE = re.compile(
+    r"FreeUsageLimitError|free_tier_limit|Free usage exceeded|Free limit reached|subscribe to (?:OpenCode )?Go",
+    re.IGNORECASE,
+)
+FREE_MODEL_ID = "muse-spark-1.3-contributor-free"
+GO_MODEL_ID = "muse-spark-1.3-contributor"
+GO_PROVIDER_ID = "opencode-go"
+GO_MODEL_ROUTE = f"{GO_PROVIDER_ID}/{GO_MODEL_ID}"
+
+GO_CAP_RE = re.compile(
+    r"UsageLimitError|usage_limit|quota_exceeded|insufficient_quota|"
+    r"usage (?:limit|exceeded)|spend limit|weekly (?:usage )?limit|"
+    r"monthly (?:usage )?limit|5[- ]?hour (?:usage )?limit|"
+    r"OpenCode Go.*(?:limit|cap)",
+    re.IGNORECASE,
+)
+
+DEFAULT_POLL = 0.75
+SESSION_CAPTURE_TIMEOUT = 20.0
+GO_LIVE_SOURCE = "opencode-go-usage-api"
+POLICY_CONTEXT_DEFAULT = str(Path.home() / ".superset" / "bin" / "auto-policy-context")
+# v9.8.15: this is an activation deadline only. It must never become an
+# absolute lifetime cap for a healthy recovered coordinator/leaf process. Keep
+# the legacy env var as a backwards-compatible override, but prefer the new
+# explicit activation name.
+RECOVERY_ACTIVATION_TIMEOUT = float(
+    os.environ.get(
+        "SUPERSET_MUSE_RECOVERY_ACTIVATION_TIMEOUT",
+        os.environ.get("SUPERSET_MUSE_RECOVERY_TIMEOUT", "60"),
+    )
+)
+
+GENERIC_RATE_RE = re.compile(
+    r"rate limit exceeded|too many requests|provider rate limit exceeded",
+    re.IGNORECASE,
+)
+LOG_LINE_LIMIT = 512 * 1024
+
+
+def eprint(*args: object) -> None:
+    print(*args, file=sys.stderr, flush=True)
+
+
+def audit(*args: object) -> None:
+    """Keep routine supervisor diagnostics out of the coordinator chat surface."""
+    text = " ".join(str(x) for x in args)
+    try:
+        path = Path.home() / ".superset" / "auto" / "coordinator-presentation.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size > 2 * 1024 * 1024:
+            rotated = path.with_name(path.name + ".1")
+            try:
+                rotated.unlink(missing_ok=True)
+                path.replace(rotated)
+            except Exception:
+                pass
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(text.rstrip() + "\n")
+    except Exception:
+        pass
+    if os.environ.get("SUPERSET_AUTO_PRESENTATION_DEBUG") == "1":
+        eprint(text)
+
+
+
+def clean_coordinator_chat_enabled(role: str) -> bool:
+    return (
+        role == "coordinator"
+        and os.environ.get("SUPERSET_AUTO_ROLE") == "coordinator"
+        and os.environ.get("SUPERSET_AUTO_CLEAN_TUI", "1") != "0"
+    )
+
+
+def enforce_clean_coordinator_tui_state(reason: str) -> None:
+    """Reassert the two OpenCode TUI visibility toggles for this AUTO run.
+
+    The initial v9.9.2 seed was not enough across Free→Go recovery because the
+    old TUI can flush KV state while it exits. Re-seeding immediately before
+    every Coordinator TUI launch makes clean presentation a lifecycle invariant
+    rather than a one-time startup preference.
+    """
+    if os.environ.get("SUPERSET_AUTO_ROLE") != "coordinator":
+        return
+    if os.environ.get("SUPERSET_AUTO_CLEAN_TUI", "1") == "0":
+        return
+    raw = os.environ.get("SUPERSET_AUTO_COORDINATOR_TUI_STATE_ROOT")
+    if not raw:
+        return
+    try:
+        root = Path(raw).expanduser().resolve()
+        allowed = (Path.home() / ".superset" / "auto" / "opencode-coordinator-state").resolve()
+        root.relative_to(allowed)
+        if root == allowed:
+            return
+        state = root / "opencode"
+        kv = state / "kv.json"
+        state.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, Any] = {}
+        try:
+            loaded = json.loads(kv.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                payload.update(loaded)
+        except Exception:
+            pass
+        payload["thinking_visibility"] = False
+        payload["tool_details_visibility"] = False
+        tmp = kv.with_name(kv.name + f".tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        tmp.replace(kv)
+        audit(f"AUTO PRESENTATION: clean Coordinator TUI state reasserted ({reason})")
+    except Exception as exc:
+        audit(f"AUTO PRESENTATION: clean TUI reassert failed ({reason}): {type(exc).__name__}")
+
+
+def recovery_transcript_path(session: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", session)[:180] or "unknown"
+    path = Path.home() / ".superset" / "auto" / "recovery-transcripts" / f"{safe}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _visible_go_text_parts(session: str, since_ms: int, seen: set[str]) -> list[tuple[str, str]]:
+    """Return newly completed, non-compaction assistant text for exact Go session.
+
+    Querying OpenCode's persisted session data avoids depending on the noisy
+    non-interactive formatter and also avoids known JSON-runner event races.
+    """
+    path = db_path()
+    if not path.is_file():
+        return []
+    out: list[tuple[str, str]] = []
+    try:
+        uri = f"file:{path}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=1)
+        try:
+            rows = conn.execute(
+                """
+                SELECT p.id, p.data, m.data
+                FROM part AS p
+                JOIN message AS m ON m.id = p.message_id
+                WHERE p.session_id = ? AND p.time_created >= ?
+                ORDER BY p.time_created ASC
+                """,
+                (session, since_ms),
+            )
+            for part_id, raw_part, raw_message in rows:
+                if str(part_id) in seen:
+                    continue
+                try:
+                    part = json.loads(raw_part)
+                    msg = json.loads(raw_message)
+                except Exception:
+                    continue
+                if not isinstance(part, dict) or not isinstance(msg, dict):
+                    continue
+                if msg.get("role") != "assistant":
+                    continue
+                if msg.get("providerID") != GO_PROVIDER_ID or msg.get("modelID") != GO_MODEL_ID:
+                    continue
+                if msg.get("summary") is True or msg.get("mode") == "compaction" or msg.get("agent") == "compaction":
+                    continue
+                if part.get("type") != "text" or part.get("synthetic") is True or part.get("ignored") is True:
+                    continue
+                timing = part.get("time")
+                if not isinstance(timing, dict) or timing.get("end") is None:
+                    continue
+                text = str(part.get("text") or "").strip()
+                if not text:
+                    seen.add(str(part_id))
+                    continue
+                if len(text) > 16000:
+                    audit(
+                        f"AUTO PRESENTATION: suppressed oversized recovery assistant text "
+                        f"part={part_id} chars={len(text)}"
+                    )
+                    seen.add(str(part_id))
+                    continue
+                seen.add(str(part_id))
+                out.append((str(part_id), text))
+        finally:
+            conn.close()
+    except Exception:
+        return []
+    return out
+
+
+def relay_clean_go_text(session: str, since_ms: int, seen: set[str]) -> None:
+    for _part_id, text in _visible_go_text_parts(session, since_ms, seen):
+        print("", flush=True)
+        print(text, flush=True)
+        print("", flush=True)
+
+
+def normalize_session_rows(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, list):
+        return [x for x in raw if isinstance(x, dict)]
+    if isinstance(raw, dict):
+        for key in ("sessions", "data", "items"):
+            value = raw.get(key)
+            if isinstance(value, list):
+                return [x for x in value if isinstance(x, dict)]
+    return []
+
+
+def session_id(row: dict[str, Any]) -> str | None:
+    for key in ("id", "sessionID", "sessionId"):
+        value = row.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def session_directory(row: dict[str, Any]) -> str | None:
+    for key in ("directory", "cwd", "path"):
+        value = row.get(key)
+        if isinstance(value, str) and value:
+            return value
+    info = row.get("info")
+    if isinstance(info, dict):
+        for key in ("directory", "cwd", "path"):
+            value = info.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def realpath_eq(a: str | None, b: str) -> bool:
+    if not a:
+        return False
+    try:
+        return os.path.realpath(os.path.expanduser(a)) == os.path.realpath(b)
+    except Exception:
+        return False
+
+
+def list_sessions(opencode: str, cwd: str) -> list[dict[str, Any]]:
+    try:
+        cp = subprocess.run(
+            [opencode, "session", "list", "--max-count", "200", "--format", "json"],
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+        if cp.returncode != 0 or not cp.stdout.strip():
+            return []
+        rows = normalize_session_rows(json.loads(cp.stdout))
+        return [r for r in rows if realpath_eq(session_directory(r), cwd)]
+    except Exception:
+        return []
+
+
+def parse_explicit_session(args: list[str]) -> tuple[str | None, bool]:
+    sid: str | None = None
+    fork = False
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("--session", "-s") and i + 1 < len(args):
+            sid = args[i + 1]
+            i += 2
+            continue
+        if arg == "--fork":
+            fork = True
+        i += 1
+    # A fork creates a new session; the supplied --session is only its parent.
+    return (None if fork else sid), fork
+
+
+def newest_candidate_id(rows: list[dict[str, Any]], before_ids: set[str]) -> str | None:
+    new_rows = [r for r in rows if session_id(r) and session_id(r) not in before_ids]
+    if len(new_rows) == 1:
+        return session_id(new_rows[0])
+    if not new_rows:
+        return None
+
+    # Prefer an unambiguous creation-time ordering when multiple sessions appeared.
+    def created_value(row: dict[str, Any]) -> float | None:
+        for key in ("created", "timeCreated", "time_created"):
+            value = row.get(key)
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                try:
+                    # ISO lexical order is stable enough for identical timezone format, but
+                    # use timestamp-like conversion only when numeric.
+                    return float(value)
+                except Exception:
+                    pass
+        time_obj = row.get("time")
+        if isinstance(time_obj, dict):
+            value = time_obj.get("created")
+            if isinstance(value, (int, float)):
+                return float(value)
+        return None
+
+    scored = [(created_value(r), session_id(r)) for r in new_rows]
+    with_times = [(t, sid) for t, sid in scored if t is not None and sid]
+    if len(with_times) == len(new_rows):
+        with_times.sort(key=lambda x: x[0])
+        if len(with_times) >= 2 and with_times[0][0] != with_times[1][0]:
+            # The coordinator/leaf session is the first session this wrapper created.
+            return with_times[0][1]
+    return None
+
+
+def db_path() -> Path:
+    override = os.environ.get("SUPERSET_OPENCODE_DB")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
+
+
+def log_dir() -> Path:
+    override = os.environ.get("SUPERSET_OPENCODE_LOG_DIR")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".local" / "share" / "opencode" / "log"
+
+
+def snapshot_log_offsets() -> dict[str, int]:
+    root = log_dir()
+    offsets: dict[str, int] = {}
+    try:
+        for path in root.glob("*.log"):
+            try:
+                offsets[str(path)] = path.stat().st_size
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return offsets
+
+
+def read_new_log_lines(offsets: dict[str, int]) -> list[str]:
+    """Read only log bytes appended since the prior scan.
+
+    Existing logs are initialized at EOF before the child starts, so concurrent
+    OpenCode sessions cannot trigger us from historical text. New files are read
+    from byte zero. Per-scan reads are bounded; exact session/provider/model
+    matching provides the second isolation boundary.
+    """
+    root = log_dir()
+    out: list[str] = []
+    try:
+        paths = sorted(root.glob("*.log"), key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return out
+
+    for path in paths:
+        key = str(path)
+        try:
+            size = path.stat().st_size
+            start = offsets.get(key, 0)
+            if size < start:
+                start = 0
+            if size == start:
+                offsets[key] = size
+                continue
+            # We only need recent status/error lines. If a single poll appended an
+            # extreme amount, keep the tail rather than loading an unbounded log.
+            if size - start > LOG_LINE_LIMIT:
+                start = size - LOG_LINE_LIMIT
+            # Track byte offsets because stat().st_size is bytes. Reading in
+            # binary mode avoids TextIO seek-cookie ambiguity on multibyte logs.
+            with path.open("rb") as fh:
+                fh.seek(start)
+                chunk = fh.read(LOG_LINE_LIMIT)
+                offsets[key] = fh.tell()
+            out.extend(chunk.decode("utf-8", errors="replace").splitlines())
+        except OSError:
+            continue
+    return out
+
+
+def _log_field_matches(line: str, keys: tuple[str, ...], value: str) -> bool:
+    """Match OpenCode's normal key=value logs and JSON-ish structured logs."""
+    v = re.escape(value)
+    for key in keys:
+        k = re.escape(key)
+        if re.search(rf"(?:^|[\s,{{]){k}=[\"']?{v}(?=$|[\s,}}\"'])", line):
+            return True
+        if re.search(rf"[\"']{k}[\"']\s*:\s*[\"']{v}[\"']", line):
+            return True
+    return False
+
+
+def line_matches_route(line: str, session: str, provider: str, model: str) -> bool:
+    return bool(
+        _log_field_matches(line, ("session.id", "sessionID", "sessionId"), session)
+        and _log_field_matches(line, ("providerID", "providerId", "provider.id"), provider)
+        and _log_field_matches(line, ("modelID", "modelId", "model.id"), model)
+    )
+
+
+def explicit_free_cap_in_log_line(line: str, session: str) -> bool:
+    return line_matches_route(line, session, "opencode", FREE_MODEL_ID) and bool(FREE_CAP_RE.search(line))
+
+
+def generic_free_rate_in_log_line(line: str, session: str) -> bool:
+    return line_matches_route(line, session, "opencode", FREE_MODEL_ID) and bool(GENERIC_RATE_RE.search(line))
+
+
+def explicit_go_cap_in_log_line(line: str, session: str) -> bool:
+    return line_matches_route(line, session, GO_PROVIDER_ID, GO_MODEL_ID) and bool(GO_CAP_RE.search(line))
+
+
+def go_route_activity_in_log_line(line: str, session: str) -> bool:
+    """Return True for newly appended exact-session Go route activity.
+
+    The incremental log reader starts at EOF before recovery begins. Therefore
+    an exact session/provider/model match is sufficient proof that the resumed
+    process reached the intended Go route; historical text cannot satisfy this.
+    """
+    return line_matches_route(line, session, GO_PROVIDER_ID, GO_MODEL_ID)
+
+def explicit_free_cap_in_session(session: str, since_ms: int) -> bool:
+    path = db_path()
+    if not path.is_file():
+        return False
+    try:
+        uri = f"file:{path}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=1)
+        try:
+            rows = conn.execute(
+                """
+                SELECT data
+                FROM message
+                WHERE session_id = ? AND time_created >= ?
+                ORDER BY time_created DESC
+                LIMIT 40
+                """,
+                (session, since_ms),
+            )
+            for (raw,) in rows:
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    continue
+                if not isinstance(data, dict) or data.get("role") != "assistant":
+                    continue
+                model = data.get("modelID")
+                provider = data.get("providerID")
+                # Only treat the Free Muse route as eligible evidence. Older rows may omit
+                # providerID, but modelID is required for this supervisor's decision.
+                if model != FREE_MODEL_ID:
+                    continue
+                error = data.get("error")
+                if error is None:
+                    continue
+                try:
+                    blob = json.dumps(error, ensure_ascii=False, sort_keys=True)
+                except Exception:
+                    blob = str(error)
+                if FREE_CAP_RE.search(blob):
+                    return True
+        finally:
+            conn.close()
+    except Exception:
+        return False
+    return False
+
+
+
+def explicit_go_cap_in_session(session: str, since_ms: int) -> bool:
+    """Return True only for an explicit hard-cap error on the Go Muse route."""
+    path = db_path()
+    if not path.is_file():
+        return False
+
+    try:
+        uri = f"file:{path}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=1)
+        try:
+            rows = conn.execute(
+                """
+                SELECT data
+                FROM message
+                WHERE session_id = ? AND time_created >= ?
+                ORDER BY time_created DESC
+                LIMIT 40
+                """,
+                (session, since_ms),
+            )
+
+            for (raw,) in rows:
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    continue
+
+                if not isinstance(data, dict) or data.get("role") != "assistant":
+                    continue
+
+                if data.get("modelID") != GO_MODEL_ID:
+                    continue
+
+                provider = data.get("providerID")
+                if provider not in (None, GO_PROVIDER_ID):
+                    continue
+
+                error = data.get("error")
+                if error is None:
+                    continue
+
+                try:
+                    blob = json.dumps(error, ensure_ascii=False, sort_keys=True)
+                except Exception:
+                    blob = str(error)
+
+                if GO_CAP_RE.search(blob):
+                    return True
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+    return False
+
+
+
+def _assistant_tokens(data: dict[str, Any]) -> float:
+    tokens = data.get("tokens")
+    total = 0.0
+    if isinstance(tokens, dict):
+        for key in ("input", "output", "reasoning"):
+            try:
+                total += float(tokens.get(key) or 0)
+            except Exception:
+                pass
+    return total
+
+
+def completed_go_turn_in_session(session: str, since_ms: int) -> bool:
+    """Prove that the exact session completed a non-zero Go Muse assistant turn."""
+    path = db_path()
+    if not path.is_file():
+        return False
+    try:
+        uri = f"file:{path}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=1)
+        try:
+            rows = conn.execute(
+                """
+                SELECT data
+                FROM message
+                WHERE session_id = ? AND time_created >= ?
+                ORDER BY time_created DESC
+                LIMIT 80
+                """,
+                (session, since_ms),
+            )
+            for (raw,) in rows:
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    continue
+                if not isinstance(data, dict) or data.get("role") != "assistant":
+                    continue
+                if data.get("providerID") != GO_PROVIDER_ID:
+                    continue
+                if data.get("modelID") != GO_MODEL_ID:
+                    continue
+                if data.get("error") is not None:
+                    continue
+                if data.get("finish") is None:
+                    continue
+                if _assistant_tokens(data) <= 0:
+                    continue
+                return True
+        finally:
+            conn.close()
+    except Exception:
+        return False
+    return False
+
+
+def render_fresh_policy_bootstrap(role: str) -> tuple[str | None, str]:
+    """Reload current repository policy for recovery/resume continuity.
+
+    The Free→Go recovery turn is itself a new model turn. v9.8.19 therefore
+    re-injects the *current* worktree policy rather than relying on compressed
+    historical session context. Failure is closed because continuing without a
+    present AUTO_PROJECT supplement can silently skip release/integration rules.
+    """
+    policy_context = os.environ.get("SUPERSET_AUTO_POLICY_CONTEXT_BIN") or POLICY_CONTEXT_DEFAULT
+    mode = ["--coordinator"] if role == "coordinator" else ["--worker", "--label", "OC Go · Muse Spark 1.3 XHigh"]
+    try:
+        cp = subprocess.run(
+            [policy_context, *mode],
+            cwd=os.getcwd(),
+            env=os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if cp.returncode != 0 or not cp.stdout.strip():
+            detail = (cp.stderr or "").strip().splitlines()[-1:]
+            return None, f"policy_context_failed:{cp.returncode}:{detail[0] if detail else 'no-detail'}"
+
+        meta = subprocess.run(
+            [policy_context, "--json"],
+            cwd=os.getcwd(),
+            env=os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        audit = "policy_context_loaded"
+        if meta.returncode == 0:
+            try:
+                doc = json.loads(meta.stdout)
+                ap = doc.get("autoProject") if isinstance(doc.get("autoProject"), dict) else {}
+                audit = (
+                    f"repo={doc.get('repoRoot') or 'unknown'} "
+                    f"autoProjectPresent={bool(ap.get('present'))} "
+                    f"autoProjectSha={ap.get('sha256') or 'none'}"
+                )
+            except Exception:
+                pass
+        return cp.stdout.rstrip(), audit
+    except Exception as exc:
+        return None, f"policy_context_error:{type(exc).__name__}"
+
+
+def run_verified_go_recovery_turn(
+    *,
+    opencode: str,
+    session: str,
+    agent: str,
+    role: str,
+    trigger_kind: str,
+    trigger_evidence: str,
+) -> tuple[bool, str]:
+    """Continue one exact session on Go and supervise it to normal completion.
+
+    v9.8.15 deliberately separates *route activation* from *task lifetime*.
+    The activation deadline exists only until newly appended OpenCode log bytes
+    prove the exact session/provider/model is running on Go. Once verified, no
+    recovery lifetime deadline remains. The process may therefore coordinate,
+    wait on workers, build, test, or otherwise run for hours while this function
+    continues monitoring explicit Go hard-cap errors.
+    """
+    cwd = os.getcwd()
+    policy_bootstrap, policy_audit = render_fresh_policy_bootstrap(role)
+    if not policy_bootstrap:
+        return False, f"policy_refresh_failed:{policy_audit}"
+    audit(f"AUTO MUSE SUPERVISOR: v9.8.19 recovery policy refresh verified ({policy_audit}).")
+
+    start_ms = int(time.time() * 1000) - 1000
+    log_offsets = snapshot_log_offsets()
+    pending_log_lines: deque[str] = deque(maxlen=300)
+    cmd = [
+        opencode,
+        "run",
+        "--session",
+        session,
+        "--agent",
+        agent,
+        "--model",
+        GO_MODEL_ROUTE,
+        "--format",
+        "default",
+        recovery_prompt(role, trigger_kind, policy_bootstrap),
+    ]
+    audit(
+        f"AUTO MUSE SUPERVISOR: submitting verified Go recovery on exact session {session} "
+        f"trigger={trigger_kind} evidence={trigger_evidence}."
+    )
+    clean_recovery = clean_coordinator_chat_enabled(role)
+    raw_recovery_fh = None
+    clean_seen: set[str] = set()
+    if clean_recovery:
+        if trigger_kind == "explicit-free-cap":
+            print(
+                "Muse Free reached its usage limit, so I switched this same Coordinator session to OpenCode Go. "
+                "I’m continuing the task with internal commands and tool output hidden.",
+                flush=True,
+            )
+        else:
+            print(
+                "Muse Free hit repeated transient rate limits, so I moved this same Coordinator session to "
+                "OpenCode Go for continuity. I’m continuing with internal commands and tool output hidden.",
+                flush=True,
+            )
+        try:
+            transcript = recovery_transcript_path(session)
+            raw_recovery_fh = transcript.open("ab", buffering=0)
+            os.chmod(transcript, 0o600)
+            audit(f"AUTO PRESENTATION: raw Free→Go recovery transcript captured at {transcript}")
+        except Exception as exc:
+            return False, f"recovery_transcript_open_error:{type(exc).__name__}"
+    try:
+        if clean_recovery:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=cwd,
+                env=os.environ.copy(),
+                stdout=raw_recovery_fh,
+                stderr=subprocess.STDOUT,
+            )
+        else:
+            proc = subprocess.Popen(cmd, cwd=cwd, env=os.environ.copy())
+    except Exception as exc:
+        if raw_recovery_fh is not None:
+            raw_recovery_fh.close()
+        return False, f"recovery_launch_error:{type(exc).__name__}"
+
+    def forward_term(signum: int, _frame: Any) -> None:
+        if proc.poll() is None:
+            try:
+                proc.send_signal(signum)
+            except Exception:
+                pass
+
+    old_term = signal.signal(signal.SIGTERM, forward_term)
+    old_hup = signal.signal(signal.SIGHUP, forward_term)
+    activation_deadline = time.monotonic() + RECOVERY_ACTIVATION_TIMEOUT
+    route_verified = False
+    try:
+        while proc.poll() is None:
+            if clean_recovery:
+                relay_clean_go_text(session, start_ms, clean_seen)
+            for line in read_new_log_lines(log_offsets):
+                pending_log_lines.append(line)
+
+            if explicit_go_cap_in_session(session, start_ms):
+                terminate_child(proc)
+                return False, "go_cap_during_recovery:persisted-message-error"
+
+            while pending_log_lines:
+                line = pending_log_lines.popleft()
+                if explicit_go_cap_in_log_line(line, session):
+                    terminate_child(proc)
+                    return False, "go_cap_during_recovery:opencode-log"
+                if not route_verified and go_route_activity_in_log_line(line, session):
+                    route_verified = True
+                    audit(
+                        f"AUTO MUSE SUPERVISOR: exact-session Go route active for {session}; "
+                        "recovery activation deadline disarmed."
+                    )
+
+            # A completed Go assistant record is an additional exact-route proof
+            # if log formatting changes or route activity was not seen in the
+            # incremental log stream.
+            if not route_verified and completed_go_turn_in_session(session, start_ms):
+                route_verified = True
+                audit(
+                    f"AUTO MUSE SUPERVISOR: exact-session Go assistant activity verified for {session}; "
+                    "recovery activation deadline disarmed."
+                )
+
+            if not route_verified and time.monotonic() >= activation_deadline:
+                terminate_child(proc)
+                return False, "recovery_activation_timeout"
+
+            time.sleep(DEFAULT_POLL)
+
+        if clean_recovery:
+            relay_clean_go_text(session, start_ms, clean_seen)
+        rc = int(proc.returncode or 0)
+        if rc != 0:
+            return False, f"recovery_run_exit:{rc}"
+
+        # The recovery process can complete between poll intervals. In that
+        # race, the exact Go assistant row may only become visible after the
+        # loop has exited. Treat the final persisted completed Go turn as the
+        # same authoritative route proof used inside the loop before rejecting
+        # a successful recovery. This keeps short recoveries from being
+        # misclassified as unverified while preserving exact-session/model
+        # fail-closed semantics.
+        if not route_verified and completed_go_turn_in_session(session, start_ms):
+            route_verified = True
+            audit(
+                f"AUTO MUSE SUPERVISOR: exact-session Go assistant activity verified for {session} "
+                "after recovery process exit; route accepted."
+            )
+
+        if not route_verified:
+            return False, "recovery_route_not_verified_on_exact_go_route"
+        if not completed_go_turn_in_session(session, start_ms):
+            return False, "recovery_turn_not_verified_on_exact_go_route"
+        audit(
+            f"AUTO MUSE SUPERVISOR: recovered Go session {session} completed normally "
+            f"via {GO_MODEL_ROUTE}."
+        )
+        return True, "verified_completed"
+    except KeyboardInterrupt:
+        terminate_child(proc)
+        return False, "recovery_interrupted"
+    finally:
+        signal.signal(signal.SIGTERM, old_term)
+        signal.signal(signal.SIGHUP, old_hup)
+        if raw_recovery_fh is not None:
+            try:
+                raw_recovery_fh.close()
+            except Exception:
+                pass
+
+def read_go_state(quota: str) -> tuple[bool, str]:
+    try:
+        cp = subprocess.run(
+            [
+                quota, "--force", "--json", "--no-cache-write",
+                "--no-codex", "--no-claude", "--no-muse-free",
+                "--no-antigravity", "--no-cursor",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if cp.returncode != 0:
+            return False, "quota_read_failed"
+        snap = json.loads(cp.stdout)
+        go = ((snap.get("pools") or {}).get("opencodeGo") or {})
+        if not isinstance(go, dict):
+            return False, "go_telemetry_missing"
+        source = go.get("source")
+        fresh = go.get("freshness")
+        availability = go.get("availability")
+        safe = go.get("reserveSafe") is True
+        hard = go.get("hardCap") is True
+        if source != GO_LIVE_SOURCE:
+            return False, f"go_telemetry_not_live:{source or 'unknown'}"
+        if fresh != "fresh":
+            return False, f"go_telemetry_not_fresh:{fresh or 'unknown'}"
+        if hard or availability != "available" or not safe:
+            limiting = go.get("limitingWindow", "unknown")
+            remaining = go.get("minimumRemainingPercent", "unknown")
+            return False, f"go_not_reserve_safe:{limiting}:{remaining}"
+        return True, "available"
+    except Exception as exc:
+        return False, f"go_telemetry_error:{type(exc).__name__}"
+
+
+def terminate_child(proc: subprocess.Popen[Any]) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+    except Exception:
+        return
+    deadline = time.monotonic() + 4.0
+    while proc.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            pass
+
+
+def recovery_prompt(role: str, trigger_kind: str, policy_bootstrap: str) -> str:
+    explicit = trigger_kind == "explicit-free-cap"
+    if explicit:
+        cause = "The Free Muse route hit an explicit provider free-tier usage cap."
+    else:
+        cause = (
+            "The Free Muse route hit a repeated exact-session transient provider rate limit "
+            "after one bounded retry. This is a continuity fallback, not proof that the daily "
+            "Free allowance is exhausted."
+        )
+    policy_prefix = (
+        f"{policy_bootstrap.rstrip()}\n\n"
+        "===== AUTO RECOVERY POLICY REFRESH v9.8.19 =====\n"
+        "The runtime has freshly reloaded the current worktree policy for this recovery turn. "
+        "Re-apply all AUTO_PROJECT release/integration requirements before continuing.\n"
+        "===== END AUTO RECOVERY POLICY REFRESH =====\n\n"
+    )
+    if role == "leaf":
+        return policy_prefix + (
+            f"AUTO_MUSE_FREE_TO_GO_RECOVERY: {cause} "
+            "Continue this exact existing leaf-worker assignment using the current session state. Do not repeat "
+            "completed work, do not dispatch children, preserve the assigned scope/write policy, and finish with "
+            "the required SUPERSET_WORKER_DONE handoff."
+        )
+    return policy_prefix + (
+        f"AUTO_MUSE_FREE_TO_GO_RECOVERY: {cause} "
+        "Continue this exact existing AUTO task from the current session state using OpenCode Go Muse. Preserve "
+        "the strategic contract, active-worker ownership, acceptance state, and terminal/sidecar state; do not "
+        "repeat completed work or create duplicate workers. Continue until the AUTO task normally completes or "
+        "a real blocking condition is reached; do not stop merely because this is a recovery turn."
+    )
+
+
+def reopen_verified_go_tui(
+    *,
+    opencode: str,
+    session: str,
+    agent: str,
+    role: str,
+) -> int:
+    """Reattach Superset to the exact verified Go session in interactive TUI mode.
+
+    This creates no model turn by itself. It only reopens the existing session
+    after the programmatic recovery turn has completed, keeping the resident
+    Go hard-cap supervisor as the parent process.
+    """
+    go_original = [
+        "--session",
+        session,
+        "--model",
+        GO_MODEL_ROUTE,
+    ]
+    audit(
+        f"AUTO MUSE SUPERVISOR: recovery completed; reopening exact Go "
+        f"session {session} in interactive TUI."
+    )
+    if clean_coordinator_chat_enabled(role):
+        enforce_clean_coordinator_tui_state("before-go-tui-reopen")
+    return run_supervised_go(
+        opencode=opencode,
+        agent=agent,
+        role=role,
+        original=go_original,
+    )
+
+
+def run_supervised_free(
+    *, opencode: str, quota: str, agent: str, fallback_agent: str, role: str, original: list[str]
+) -> int:
+    cwd = os.getcwd()
+    explicit_sid, _fork = parse_explicit_session(original)
+    before_rows = list_sessions(opencode, cwd) if explicit_sid is None else []
+    before_ids = {sid for r in before_rows if (sid := session_id(r))}
+    launch_ms = int(time.time() * 1000) - 2000
+    log_offsets = snapshot_log_offsets()
+    pending_log_lines: deque[str] = deque(maxlen=300)
+    generic_rate_epochs = 0
+    last_generic_rate_at: float | None = None
+
+    cmd = [opencode, "--agent", agent, "--auto", *original]
+    if clean_coordinator_chat_enabled(role):
+        enforce_clean_coordinator_tui_state("before-tui-launch")
+    proc = subprocess.Popen(cmd, cwd=cwd, env=os.environ.copy())
+    session = explicit_sid
+    capture_deadline = time.monotonic() + SESSION_CAPTURE_TIMEOUT
+    last_capture_attempt = 0.0
+
+    def forward_term(signum: int, _frame: Any) -> None:
+        if proc.poll() is None:
+            try:
+                proc.send_signal(signum)
+            except Exception:
+                pass
+
+    old_term = signal.signal(signal.SIGTERM, forward_term)
+    old_hup = signal.signal(signal.SIGHUP, forward_term)
+    try:
+        while proc.poll() is None:
+            now = time.monotonic()
+            for line in read_new_log_lines(log_offsets):
+                pending_log_lines.append(line)
+
+            if session is None and now - last_capture_attempt >= 0.8:
+                last_capture_attempt = now
+                rows = list_sessions(opencode, cwd)
+                candidate = newest_candidate_id(rows, before_ids)
+                if candidate:
+                    session = candidate
+                    audit(f"AUTO MUSE SUPERVISOR: captured OpenCode session {session}")
+                elif now > capture_deadline:
+                    # Keep trying at a lower cadence. Failure to capture does not kill a
+                    # healthy Free session, but it makes automatic handoff fail closed.
+                    last_capture_attempt = now + 3.0
+
+            free_fallback = False
+            trigger_kind = None
+            evidence = None
+            if session:
+                if explicit_free_cap_in_session(session, launch_ms):
+                    free_fallback = True
+                    trigger_kind = "explicit-free-cap"
+                    evidence = "persisted-message-error"
+                else:
+                    # Retryable OpenCode provider errors are surfaced through
+                    # session.status / stream logs and are not necessarily persisted in
+                    # message.data.error until retries terminate. Inspect only new log
+                    # lines from this wrapper's lifetime and require exact
+                    # session/provider/model identity.
+                    while pending_log_lines:
+                        line = pending_log_lines.popleft()
+                        if explicit_free_cap_in_log_line(line, session):
+                            free_fallback = True
+                            trigger_kind = "explicit-free-cap"
+                            evidence = "opencode-log-explicit-free-cap"
+                            break
+                        if generic_free_rate_in_log_line(line, session):
+                            # One provider failure can be logged more than once by the
+                            # stream/processor stack. Count retry *epochs*, not raw lines,
+                            # so duplicate writes from the same failure do not consume the
+                            # policy's one bounded retry. A later exact-session Free-model
+                            # rate failure is the second epoch and triggers Go fallback.
+                            hit_at = time.monotonic()
+                            if last_generic_rate_at is None or hit_at - last_generic_rate_at >= 1.5:
+                                generic_rate_epochs += 1
+                                last_generic_rate_at = hit_at
+                                audit(
+                                    f"AUTO MUSE SUPERVISOR: exact-session Free transient rate-limit "
+                                    f"epoch={generic_rate_epochs} session={session}; "
+                                    "epoch 1 permits one bounded retry, epoch 2 triggers continuity fallback."
+                                )
+                            if generic_rate_epochs >= 2:
+                                free_fallback = True
+                                trigger_kind = "transient-rate-fallback"
+                                evidence = "opencode-log-repeated-free-rate-limit"
+                                break
+
+            if free_fallback and session:
+                go_ok, why = read_go_state(quota)
+                if not go_ok:
+                    terminate_child(proc)
+                    marker = (
+                        "MUSE_LEAF_ROUTE_UNAVAILABLE" if role == "leaf" else "CONTROL_PLANE_HANDOFF_REQUIRED"
+                    )
+                    eprint(
+                        f"{marker}: Free→Go fallback triggered class={trigger_kind} ({evidence}); automatic Go handoff blocked ({why})."
+                    )
+                    return 75
+
+                audit(
+                    f"AUTO MUSE SUPERVISOR: Free→Go fallback in session {session} "
+                    f"class={trigger_kind} evidence={evidence}; switching same session to {fallback_agent}."
+                )
+                terminate_child(proc)
+                if clean_coordinator_chat_enabled(role):
+                    enforce_clean_coordinator_tui_state("after-free-tui-stop")
+
+                # v9.8.15: the non-interactive exact-session Go process becomes the
+                # recovered coordinator/leaf for the remainder of this task. Only route
+                # activation is time-bounded; once exact Go activity is proven, no
+                # absolute recovery lifetime deadline remains.
+                recovered, recovery_reason = run_verified_go_recovery_turn(
+                    opencode=opencode,
+                    session=session,
+                    agent=fallback_agent,
+                    role=role,
+                    trigger_kind=trigger_kind or "unknown-fallback",
+                    trigger_evidence=evidence or "unknown",
+                )
+                if not recovered:
+                    marker = (
+                        "MUSE_LEAF_ROUTE_UNAVAILABLE"
+                        if role == "leaf"
+                        else "CONTROL_PLANE_HANDOFF_REQUIRED"
+                    )
+                    eprint(
+                        f"{marker}: Free→Go recovery failed closed for session {session} "
+                        f"({recovery_reason})."
+                    )
+                    return 75
+
+                # v9.8.18 UI continuity repair:
+                # The recovery process was intentionally non-interactive so the Go
+                # route/model could be forced and verified. Do not return to the
+                # parent shell when it finishes: that strands Superset on a plain
+                # terminal, hides the session's final assistant response, and makes
+                # the user's next message execute as a shell command. Reopen the
+                # exact same verified Go session in the TUI and keep the resident
+                # Go hard-cap supervisor around it. No new model turn is created.
+                return reopen_verified_go_tui(
+                    opencode=opencode,
+                    session=session,
+                    agent=fallback_agent,
+                    role=role,
+                )
+
+            time.sleep(DEFAULT_POLL)
+
+        return int(proc.returncode or 0)
+    except KeyboardInterrupt:
+        terminate_child(proc)
+        return 130
+    finally:
+        signal.signal(signal.SIGTERM, old_term)
+        signal.signal(signal.SIGHUP, old_hup)
+
+
+def run_supervised_go(
+    *, opencode: str, agent: str, role: str, original: list[str]
+) -> int:
+    cwd = os.getcwd()
+
+    explicit_sid, _fork = parse_explicit_session(original)
+    before_rows = list_sessions(opencode, cwd) if explicit_sid is None else []
+    before_ids = {sid for r in before_rows if (sid := session_id(r))}
+
+    launch_ms = int(time.time() * 1000) - 2000
+    log_offsets = snapshot_log_offsets()
+    pending_log_lines: deque[str] = deque(maxlen=300)
+
+    cmd = [opencode, "--agent", agent, "--auto", *original]
+    if clean_coordinator_chat_enabled(role):
+        enforce_clean_coordinator_tui_state("before-tui-launch")
+    proc = subprocess.Popen(cmd, cwd=cwd, env=os.environ.copy())
+
+    session = explicit_sid
+    capture_deadline = time.monotonic() + SESSION_CAPTURE_TIMEOUT
+    last_capture_attempt = 0.0
+
+    def forward_term(signum: int, _frame: Any) -> None:
+        if proc.poll() is None:
+            try:
+                proc.send_signal(signum)
+            except Exception:
+                pass
+
+    old_term = signal.signal(signal.SIGTERM, forward_term)
+    old_hup = signal.signal(signal.SIGHUP, forward_term)
+
+    try:
+        while proc.poll() is None:
+            now = time.monotonic()
+            for line in read_new_log_lines(log_offsets):
+                pending_log_lines.append(line)
+
+            if session is None and now - last_capture_attempt >= 0.8:
+                last_capture_attempt = now
+                rows = list_sessions(opencode, cwd)
+                candidate = newest_candidate_id(rows, before_ids)
+
+                if candidate:
+                    session = candidate
+                    audit(
+                        f"AUTO MUSE SUPERVISOR: captured Go OpenCode session {session}"
+                    )
+                elif now > capture_deadline:
+                    # Do not kill a healthy Go session merely because capture failed.
+                    # Keep retrying at a lower cadence.
+                    last_capture_attempt = now + 3.0
+
+            go_cap = False
+            if session:
+                go_cap = explicit_go_cap_in_session(session, launch_ms)
+                if not go_cap:
+                    while pending_log_lines:
+                        line = pending_log_lines.popleft()
+                        if explicit_go_cap_in_log_line(line, session):
+                            go_cap = True
+                            break
+
+            if session and go_cap:
+                terminate_child(proc)
+
+                marker = (
+                    "MUSE_LEAF_ROUTE_UNAVAILABLE"
+                    if role == "leaf"
+                    else "CONTROL_PLANE_HANDOFF_REQUIRED"
+                )
+
+                eprint(
+                    f"{marker}: explicit OpenCode Go usage cap detected "
+                    f"in session {session}."
+                )
+                return 75
+
+            time.sleep(DEFAULT_POLL)
+
+        return int(proc.returncode or 0)
+
+    except KeyboardInterrupt:
+        terminate_child(proc)
+        return 130
+
+    finally:
+        signal.signal(signal.SIGTERM, old_term)
+        signal.signal(signal.SIGHUP, old_hup)
+
+
+
+
+def cleanup_coordinator_tui_state() -> None:
+    """Remove only the private per-run OpenCode TUI state staged by AUTO.
+
+    The coordinator overrides XDG_STATE_HOME only for its own process tree, so
+    the user's normal OpenCode kv.json is never edited and requires no restore.
+    """
+    if os.environ.get("SUPERSET_AUTO_ROLE") != "coordinator":
+        return
+    raw = os.environ.get("SUPERSET_AUTO_COORDINATOR_TUI_STATE_ROOT")
+    if not raw:
+        return
+    try:
+        path = Path(raw).expanduser().resolve()
+        allowed = (Path.home() / ".superset" / "auto" / "opencode-coordinator-state").resolve()
+        path.relative_to(allowed)
+        if path == allowed:
+            return
+        shutil.rmtree(path, ignore_errors=True)
+    except Exception:
+        pass
+
+def cleanup_hidden_coordinator_policy() -> None:
+    """Best-effort cleanup for the per-process hidden coordinator policy file."""
+    if os.environ.get("SUPERSET_AUTO_ROLE") != "coordinator":
+        return
+    raw = os.environ.get("SUPERSET_AUTO_HIDDEN_POLICY_FILE")
+    if not raw:
+        return
+    try:
+        path = Path(raw).expanduser()
+        allowed = Path.home() / ".superset" / "auto" / "coordinator-policy"
+        try:
+            path.resolve().relative_to(allowed.resolve())
+        except Exception:
+            return
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Superset Muse Free-to-Go resident supervisor")
+    parser.add_argument("--role", choices=("coordinator", "leaf"), required=True)
+    parser.add_argument("--route", choices=("free", "go"), required=True)
+    parser.add_argument("--agent", required=True)
+    parser.add_argument("--fallback-agent", default="muse-go-auto")
+    parser.add_argument("--opencode", required=True)
+    parser.add_argument("--quota", required=True)
+    parser.add_argument("args", nargs=argparse.REMAINDER)
+    ns = parser.parse_args()
+    original = list(ns.args)
+    if original and original[0] == "--":
+        original = original[1:]
+
+    try:
+        if ns.route == "go":
+            return run_supervised_go(
+                opencode=ns.opencode,
+                agent=ns.agent,
+                role=ns.role,
+                original=original,
+            )
+
+        return run_supervised_free(
+            opencode=ns.opencode,
+            quota=ns.quota,
+            agent=ns.agent,
+            fallback_agent=ns.fallback_agent,
+            role=ns.role,
+            original=original,
+        )
+    finally:
+        cleanup_hidden_coordinator_policy()
+        cleanup_coordinator_tui_state()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

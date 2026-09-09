@@ -1,0 +1,9 @@
+{
+  "supersetMinimumVersion": "1.27.0",
+  "supersetSourceTag": "desktop-v1.27.0",
+  "sourceReviewedAt": "2026-09-09",
+  "opencodeSourceBaseline": "1.18.29",
+  "pythonMinimumVersion": "3.10",
+  "platform": "macOS",
+  "liveMacValidation": "pending"
+}

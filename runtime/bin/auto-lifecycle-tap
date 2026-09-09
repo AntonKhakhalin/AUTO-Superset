@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Record Superset lifecycle hook events for AUTO workspace supervision.
+
+This helper is intentionally best-effort and non-blocking from the agent hook's
+perspective. It records only events that match an active AUTO worker by terminal
+or previously learned agent session id, so normal/manual Superset agents do not
+pollute the AUTO event stream.
+"""
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import time
+from typing import Any
+
+VERSION = "9.8.23"
+MARKER = "SUPERSET_AUTO_LIFECYCLE_TAP_V9823"
+HOME = Path(os.environ.get("SUPERSET_HOME_DIR") or (Path.home() / ".superset"))
+ROOT = Path(os.environ.get("SUPERSET_AUTO_WORKSPACE_SUPERVISOR_ROOT") or (HOME / "auto" / "workspace-supervisor"))
+
+
+def safe_name(v: str) -> str:
+    return (re.sub(r"[^A-Za-z0-9._-]+", "_", v)[:180] or "unknown")
+
+
+def ws_dir(workspace: str) -> Path:
+    return ROOT / safe_name(workspace)
+
+
+def lock_file(workspace: str) -> Path:
+    return ws_dir(workspace) / ".workspace.lock"
+
+
+def regs_dir(workspace: str) -> Path:
+    return ws_dir(workspace) / "workers"
+
+
+def read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        x = json.loads(path.read_text(encoding="utf-8"))
+        return x if isinstance(x, dict) else None
+    except Exception:
+        return None
+
+
+def atomic_json(path: Path, obj: dict[str, Any]) -> None:
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{time.time_ns()}")
+    tmp.write_text(json.dumps(obj, separators=(",", ":"), ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def append_line(path: Path, obj: dict[str, Any]) -> None:
+    line = json.dumps(obj, separators=(",", ":"), ensure_ascii=False) + "\n"
+    with path.open("a", encoding="utf-8") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        fh.write(line)
+        fh.flush()
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def find_match(workspace: str, terminal: str, session: str | None) -> tuple[Path, dict[str, Any]] | None:
+    d = regs_dir(workspace)
+    if not d.is_dir():
+        return None
+    regs: list[tuple[Path, dict[str, Any]]] = []
+    for p in d.glob("*.json"):
+        reg = read_json(p)
+        if not reg or reg.get("state") in {"DONE", "FAILED_TERMINAL", "SUPERVISION_LOST"}:
+            continue
+        regs.append((p, reg))
+        aliases = set(reg.get("terminalAliases") or [])
+        aliases.update([str(reg.get("workerId") or ""), str(reg.get("currentTerminalId") or "")])
+        if terminal in aliases:
+            return p, reg
+    if session:
+        matches = [(p, r) for p, r in regs if r.get("agentSessionId") == session]
+        if matches:
+            return max(matches, key=lambda pr: int(pr[1].get("updatedEpoch") or 0))
+    return None
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--workspace", required=True)
+    ap.add_argument("--terminal", required=True)
+    ap.add_argument("--agent", default="")
+    ap.add_argument("--session", default="")
+    ap.add_argument("--event", required=True)
+    ns = ap.parse_args()
+    workspace = ns.workspace.strip()
+    terminal = ns.terminal.strip()
+    if not workspace or not terminal:
+        return 0
+    d = ws_dir(workspace)
+    if not d.is_dir():
+        return 0
+    lf = lock_file(workspace)
+    lf.parent.mkdir(parents=True, exist_ok=True)
+    with lf.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        matched = find_match(workspace, terminal, ns.session.strip() or None)
+        if not matched:
+            return 0
+        path, reg = matched
+        old_terminal = str(reg.get("currentTerminalId") or reg.get("workerId"))
+        session = ns.session.strip() or None
+        if session and not reg.get("agentSessionId"):
+            reg["agentSessionId"] = session
+        if session and reg.get("agentSessionId") == session and terminal != old_terminal:
+            aliases = list(dict.fromkeys([*(reg.get("terminalAliases") or []), old_terminal, terminal]))
+            reg["terminalAliases"] = aliases
+            reg["currentTerminalId"] = terminal
+            reg["nativeResumeState"] = "REBIND_EVENT_PENDING"
+        reg["lastTapAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        reg["lastTapEpoch"] = int(time.time())
+        atomic_json(path, reg)
+        event = {
+            "version": VERSION,
+            "marker": MARKER,
+            "workspaceId": workspace,
+            "workerId": reg.get("workerId"),
+            "terminalId": terminal,
+            "previousTerminalId": old_terminal if old_terminal != terminal else None,
+            "agentId": ns.agent or reg.get("agentId"),
+            "agentSessionId": session,
+            "eventType": ns.event,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "epoch": int(time.time()),
+        }
+        append_line(d / "lifecycle.jsonl", event)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception:
+        # Hook taps must never block or break the underlying agent lifecycle.
+        raise SystemExit(0)

@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Deterministic natural-language renderer for Superset AUTO v9.9.2 clean chat.
+
+This helper never decides orchestration state. It only renders already-authoritative
+machine events and returns a compact AUTO_INTERNAL line for follow-up control work.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from typing import Any
+
+VERSION = "9.9.2"
+MARKER = "SUPERSET_AUTO_PRESENT_V992_CLEAN_CHAT"
+
+
+def label_task(obj: dict[str, Any]) -> tuple[str, str]:
+    label = str(obj.get("agentLabel") or obj.get("label") or "The worker")
+    task = str(obj.get("task") or "its assigned task")
+    return label, task
+
+
+def failure_text(kind: str | None) -> str:
+    return {
+        "WORKER_QUOTA_TERMINATED": "hit its usage limit",
+        "WORKER_PROVIDER_BUSY": "was rejected because the provider is overloaded",
+        "WORKER_MODEL_UNAVAILABLE": "could not continue because the selected model is unavailable",
+        "WORKER_AUTH_TERMINATED": "lost provider authorization",
+        "WORKER_PROVIDER_TERMINATED": "hit a fatal provider error",
+        "WORKER_RUNTIME_TERMINATED": "stopped before producing a valid handoff",
+        "TERMINAL_NOT_ACTIVE": "lost its Superset terminal control channel",
+        "RESIDENT_HEARTBEAT_STALE": "lost its resident supervision heartbeat",
+        "WORKSPACE_SUPERVISOR_HEARTBEAT_STALE": "lost its workspace supervision heartbeat",
+    }.get(kind or "", "stopped before normal completion")
+
+
+def compact_internal(obj: dict[str, Any], keys: list[str]) -> dict[str, Any]:
+    out = {"presentationVersion": VERSION}
+    for key in keys:
+        if key in obj and obj.get(key) is not None:
+            out[key] = obj.get(key)
+    return out
+
+
+def dispatch(obj: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    label, task = label_task(obj)
+    kind = str(obj.get("kind") or "")
+    supervision = obj.get("supervision") if isinstance(obj.get("supervision"), dict) else {}
+    if kind == "terminal":
+        human = f"Dispatched {label} to {task}. Superset is supervising it and will surface completion, failure, or an input request."
+    else:
+        human = f"Dispatched {label} to {task}. I’ll track the returned Superset session and continue when its state changes."
+    internal = compact_internal(obj, ["workspaceId", "terminalId", "sessionId", "agentId", "agentLabel", "task", "kind"])
+    if supervision:
+        internal["supervision"] = {
+            k: supervision.get(k)
+            for k in ("mode", "workerId", "stateFile", "handoff", "heartbeatFile", "eventsFile")
+            if supervision.get(k) is not None
+        }
+    return human, internal
+
+
+def worker_watch(obj: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    state = str(obj.get("state") or "UNKNOWN")
+    phase = str(obj.get("workerPhase") or state)
+    label, task = label_task(obj)
+    concurrent = bool(obj.get("concurrentEvent"))
+
+    if state == "RUNNING":
+        if phase == "WAITING_INPUT":
+            human = f"{label} needs input while working on {task}. I’ll resolve the pending interaction before treating the worker as stalled or failed."
+        elif phase == "NATIVE_RESUMING":
+            attempt = int(obj.get("nativeResumeAttemptCount") or 0)
+            if attempt:
+                human = f"{label} lost its terminal while working on {task}. Superset is restoring the same agent session; the logical worker remains reserved and no competing writer will be started."
+            else:
+                human = f"{label} lost its terminal while working on {task}. I’m giving Superset its native same-session recovery window while keeping the logical worker reserved."
+        elif phase == "AWAITING_HANDOFF" or obj.get("handoffAwaitingResident"):
+            human = f"{label} reached a turn boundary for {task}. Workspace supervision is checking for its durable handoff before I advance."
+        elif obj.get("passiveLeaseExpired"):
+            human = f"{label} is still working on {task}. The host-safe wait lease ended normally and workspace supervision remains healthy."
+        elif obj.get("rewatchSuppressed"):
+            human = f"{label} is still working on {task}. Workspace supervision remains active, so I should continue with other useful independent work instead of polling it."
+        else:
+            human = f"{label} is still working on {task}. Superset is supervising it continuously and will surface the next meaningful state change."
+    elif state == "DONE":
+        human = f"{label} finished {task} and left a durable handoff. I can collect the result and continue validation."
+    elif state == "FAILED_TERMINAL":
+        human = f"{label} {failure_text(obj.get('failureClass'))} while working on {task}. Its partial state is preserved for approved fallback recovery."
+    elif state == "SUPERVISION_LOST":
+        human = f"Supervision was lost for {label} while it was working on {task}. I need to recover the control channel before allowing a replacement writer."
+    else:
+        human = f"{label} reported an unrecognized worker state for {task}; machine state must be inspected before continuing."
+
+    if concurrent:
+        human = "Another worker changed state while I was waiting. " + human
+
+    internal = compact_internal(obj, [
+        "state", "workerPhase", "failureClass", "agentLabel", "task", "concurrentEvent",
+        "passiveLeaseExpired", "rewatchSuppressed", "handoffAwaitingResident", "attentionRequired",
+        "nativeResumePending", "terminalId", "requestedTerminalId", "handoff", "schedulerDirective",
+    ])
+    return human, internal
+
+
+def semantic_event(obj: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    event = str(obj.get("type") or obj.get("event") or "event")
+    label, task = label_task(obj)
+    messages = {
+        "worker.dispatched": f"Dispatched {label} to {task}.",
+        "worker.running": f"{label} is working on {task}.",
+        "worker.waiting_input": f"{label} needs input while working on {task}.",
+        "worker.native_resume_grace": f"{label} lost its terminal during {task}. Superset native same-session recovery is active and the worker remains reserved.",
+        "worker.native_resume_attempt": f"Superset is explicitly restoring {label}'s existing agent session for {task}; no replacement worker is being created.",
+        "worker.native_resumed": f"{label} resumed successfully in a fresh terminal and is continuing {task}.",
+        "worker.completed": f"{label} finished {task} and left a durable handoff.",
+        "worker.failed": f"{label} {failure_text(obj.get('failureClass'))} while working on {task}.",
+        "worker.supervision_lost": f"Supervision was lost for {label} while it was working on {task}.",
+    }
+    human = messages.get(event, f"AUTO event: {event} for {label} ({task}).")
+    return human, compact_internal(obj, ["type", "event", "workspaceId", "workerId", "agentLabel", "task", "failureClass", "at"])
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("kind", choices=["dispatch", "worker-watch", "event"])
+    parser.add_argument("--no-internal", action="store_true")
+    ns = parser.parse_args()
+    try:
+        obj = json.load(sys.stdin)
+        if not isinstance(obj, dict):
+            raise ValueError("payload must be an object")
+    except Exception as exc:
+        print(f"AUTO presentation error: {exc}", file=sys.stderr)
+        return 65
+
+    if ns.kind == "dispatch":
+        human, internal = dispatch(obj)
+    elif ns.kind == "event":
+        human, internal = semantic_event(obj)
+    else:
+        human, internal = worker_watch(obj)
+    print(human)
+    if not ns.no_internal:
+        print("AUTO_INTERNAL " + json.dumps(internal, separators=(",", ":"), ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,6 @@
+#!/bin/zsh
+set -e
+
+export SUPERSET_AUTO=1
+
+exec claude "$@"

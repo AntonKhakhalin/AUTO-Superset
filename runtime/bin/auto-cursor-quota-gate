@@ -1,0 +1,68 @@
+#!/bin/bash
+# SUPERSET_AUTO_CURSOR_MONTHLY_GATE_V9810
+# Read-only Cursor included-usage gate. Never creates a model turn and never
+# enables on-demand billing.
+set -u
+
+STATUS_BIN="${SUPERSET_AUTO_QUOTA_STATUS_BIN:-$HOME/.superset/bin/auto-quota-status}"
+POOL="${1:-}"
+QUIET=0
+if [[ "$POOL" == "--quiet" ]]; then
+  QUIET=1
+  POOL="${2:-}"
+elif [[ "${2:-}" == "--quiet" ]]; then
+  QUIET=1
+fi
+
+case "$POOL" in
+  cursorModels|cursorOtherModels) ;;
+  *)
+    echo "ERROR: usage: auto-cursor-quota-gate [--quiet] <cursorModels|cursorOtherModels>" >&2
+    exit 64
+    ;;
+esac
+
+if [[ ! -x "$STATUS_BIN" ]]; then
+  echo "CURSOR_GATE BLOCKED reason=quota_helper_unavailable helper=$STATUS_BIN" >&2
+  exit 75
+fi
+
+TMP="$(mktemp -t superset-cursor-quota.XXXXXX)" || exit 75
+trap 'rm -f "$TMP"' EXIT INT TERM HUP
+if ! "$STATUS_BIN" --force --json --no-cache-write --no-codex --no-claude --no-muse-free --no-opencode-go --no-antigravity >"$TMP"; then
+  echo "CURSOR_GATE BLOCKED reason=quota_read_failed" >&2
+  exit 75
+fi
+
+python3 - "$TMP" "$POOL" "$QUIET" <<'PY'
+import json, sys
+path, pool_name, quiet = sys.argv[1], sys.argv[2], int(sys.argv[3])
+try:
+    data=json.load(open(path))
+    p=(data.get('pools') or {}).get(pool_name) or {}
+    m=p.get('monthly') or {}
+    source=p.get('source')
+    freshness=p.get('freshness')
+    availability=p.get('availability')
+    remaining=m.get('remainingPercent')
+    used=m.get('usedPercent')
+    reset=m.get('resetsAt') or p.get('billingCycleEnd')
+    on_demand=bool(p.get('onDemandEnabled'))
+    ok=(source=='cursor-usage-summary' and freshness=='fresh' and availability=='available' and isinstance(remaining,(int,float)) and remaining>5)
+except Exception as exc:
+    print(f"CURSOR_GATE BLOCKED pool={pool_name} reason=parse_failed error={type(exc).__name__}", file=sys.stderr)
+    sys.exit(75)
+
+if not quiet or not ok:
+    state='OPEN' if ok else 'BLOCKED'
+    print(
+        f"CURSOR_GATE {state} pool={pool_name} source={source} freshness={freshness} "
+        f"availability={availability} used={used} remaining={remaining} resetAt={reset} "
+        f"onDemandEnabled={str(on_demand).lower()}",
+        file=sys.stderr if not ok else sys.stdout,
+    )
+
+# A pre-existing on-demand setting is informational. We do not change it; the
+# included-pool floor prevents AUTO from intentionally crossing into overage.
+sys.exit(0 if ok else 75)
+PY

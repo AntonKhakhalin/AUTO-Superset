@@ -1,0 +1,14 @@
+#!/bin/zsh
+
+set -e
+
+export SUPERSET_AUTO=1
+
+OPENCODE_BIN="$(command -v opencode)"
+
+if [[ -z "$OPENCODE_BIN" ]]; then
+  echo "ERROR: opencode not found in PATH" >&2
+  exit 127
+fi
+
+exec "$OPENCODE_BIN" "$@"

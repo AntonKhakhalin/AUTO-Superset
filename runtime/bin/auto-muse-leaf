@@ -1,0 +1,174 @@
+#!/bin/zsh
+# SUPERSET_MUSE_LEAF_V9817_PROVIDER_ISOLATED
+set -u
+
+QUOTA="$HOME/.superset/bin/auto-quota-status"
+OPENCODE="${SUPERSET_OPENCODE_BIN:-$(command -v opencode 2>/dev/null || true)}"
+SUPERVISOR="${SUPERSET_MUSE_SUPERVISOR_BIN:-$HOME/.superset/bin/auto-muse-supervisor}"
+
+FREE_AGENT="muse-auto"
+GO_AGENT="muse-go-auto"
+
+DRY_RUN=0
+FORCE_GO=0
+
+if [[ "${1:-}" == "--force-go" ]]; then
+  FORCE_GO=1
+  shift
+fi
+
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=1
+  shift
+fi
+
+if [[ ! -x "$QUOTA" ]]; then
+  echo "ERROR: quota helper unavailable: $QUOTA" >&2
+  exit 70
+fi
+
+if [[ -z "$OPENCODE" || ! -x "$OPENCODE" ]]; then
+  echo "ERROR: opencode executable not found" >&2
+  exit 70
+fi
+
+if [[ ! -x "$SUPERVISOR" ]]; then
+  echo "ERROR: Muse supervisor unavailable: $SUPERVISOR" >&2
+  exit 70
+fi
+
+SNAPSHOT="$("$QUOTA" --force --json --no-cache-write --no-codex --no-claude --no-antigravity --no-cursor 2>/dev/null || true)"
+
+if [[ -z "$SNAPSHOT" ]] || ! jq -e . >/dev/null 2>&1 <<<"$SNAPSHOT"; then
+  echo "ERROR: unable to obtain valid quota telemetry" >&2
+  exit 70
+fi
+
+FREE_STATE="$(jq -r '.pools.museFree.museFreeState // "UNKNOWN"' <<<"$SNAPSHOT")"
+FREE_AVAIL="$(jq -r '.pools.museFree.availability // "unknown"' <<<"$SNAPSHOT")"
+
+GO_AVAIL="$(jq -r '.pools.opencodeGo.availability // "unknown"' <<<"$SNAPSHOT")"
+GO_SAFE="$(jq -r '.pools.opencodeGo.reserveSafe // false' <<<"$SNAPSHOT")"
+GO_LIMITING="$(jq -r '.pools.opencodeGo.limitingWindow // "unknown"' <<<"$SNAPSHOT")"
+GO_MIN_REMAIN="$(jq -r '.pools.opencodeGo.minimumRemainingPercent // "unknown"' <<<"$SNAPSHOT")"
+
+# Overrides exist only for zero-inference dry-run testing.
+if (( DRY_RUN )); then
+  [[ -n "${SUPERSET_MUSE_TEST_FREE_STATE:-}" ]] &&
+    FREE_STATE="$SUPERSET_MUSE_TEST_FREE_STATE"
+
+  [[ -n "${SUPERSET_MUSE_TEST_FREE_AVAILABILITY:-}" ]] &&
+    FREE_AVAIL="$SUPERSET_MUSE_TEST_FREE_AVAILABILITY"
+
+  [[ -n "${SUPERSET_MUSE_TEST_GO_AVAILABILITY:-}" ]] &&
+    GO_AVAIL="$SUPERSET_MUSE_TEST_GO_AVAILABILITY"
+
+  [[ -n "${SUPERSET_MUSE_TEST_GO_RESERVE_SAFE:-}" ]] &&
+    GO_SAFE="$SUPERSET_MUSE_TEST_GO_RESERVE_SAFE"
+fi
+
+ROUTE="free"
+AGENT="$FREE_AGENT"
+REASON="free-normal"
+
+if (( FORCE_GO )); then
+  if [[ "$GO_AVAIL" == "available" && "$GO_SAFE" == "true" ]]; then
+    ROUTE="go"
+    AGENT="$GO_AGENT"
+    REASON="forced-go"
+  else
+    echo "MUSE_LEAF_ROUTE_UNAVAILABLE: forced Go requested but OpenCode Go is not reserve-safe." >&2
+    echo "Go availability=$GO_AVAIL limitingWindow=$GO_LIMITING minimumRemaining=$GO_MIN_REMAIN" >&2
+    exit 75
+  fi
+else
+  case "$FREE_STATE" in
+  NORMAL)
+    if [[ "$FREE_AVAIL" == "available" ]]; then
+      ROUTE="free"
+      AGENT="$FREE_AGENT"
+      REASON="free-normal"
+    elif [[ "$GO_AVAIL" == "available" && "$GO_SAFE" == "true" ]]; then
+      ROUTE="go"
+      AGENT="$GO_AGENT"
+      REASON="free-unavailable"
+    else
+      echo "MUSE_LEAF_ROUTE_UNAVAILABLE: neither Muse route is safely available." >&2
+      exit 75
+    fi
+    ;;
+
+  NEAR_CAP)
+    # v9.7.1 allows bounded Free work through 979.
+    ROUTE="free"
+    AGENT="$FREE_AGENT"
+    REASON="free-near-cap"
+    ;;
+
+  HANDOFF_READY|CAPPED_UNTIL_RESET)
+    if [[ "$GO_AVAIL" == "available" && "$GO_SAFE" == "true" ]]; then
+      ROUTE="go"
+      AGENT="$GO_AGENT"
+      REASON="free-${FREE_STATE:l}"
+    else
+      echo "MUSE_LEAF_ROUTE_UNAVAILABLE: Free=$FREE_STATE; OpenCode Go is not reserve-safe." >&2
+      echo "Go availability=$GO_AVAIL limitingWindow=$GO_LIMITING minimumRemaining=$GO_MIN_REMAIN" >&2
+      exit 75
+    fi
+    ;;
+
+  UNKNOWN)
+    if [[ "$GO_AVAIL" == "available" && "$GO_SAFE" == "true" ]]; then
+      ROUTE="go"
+      AGENT="$GO_AGENT"
+      REASON="free-telemetry-unknown"
+    else
+      echo "MUSE_LEAF_ROUTE_UNAVAILABLE: Free telemetry unknown and Go is not safely usable." >&2
+      exit 75
+    fi
+    ;;
+
+  *)
+    echo "MUSE_LEAF_ROUTE_UNAVAILABLE: unrecognized Free state '$FREE_STATE'." >&2
+    exit 75
+    ;;
+  esac
+fi
+
+if (( DRY_RUN )); then
+  jq -n \
+    --arg route "$ROUTE" \
+    --arg agent "$AGENT" \
+    --arg reason "$REASON" \
+    --arg freeState "$FREE_STATE" \
+    --arg freeAvailability "$FREE_AVAIL" \
+    --arg goAvailability "$GO_AVAIL" \
+    --argjson goReserveSafe "$([[ "$GO_SAFE" == "true" ]] && echo true || echo false)" \
+    '{
+      route: $route,
+      agent: $agent,
+      reason: $reason,
+      freeState: $freeState,
+      freeAvailability: $freeAvailability,
+      goAvailability: $goAvailability,
+      goReserveSafe: $goReserveSafe
+    }'
+  exit 0
+fi
+
+echo "AUTO MUSE LEAF ROUTE: $ROUTE ($REASON) → $AGENT" >&2
+
+# Keep the leaf recursion guard active regardless of Free/Go route.
+export SUPERSET_MUSE_LEAF=1
+
+# The same resident supervisor is used for both Free and Go leaf workers.
+# Free can hand off the exact session to Go; a directly selected Go leaf stays
+# supervised for Go hard-cap detection while preserving the leaf recursion guard.
+exec "$SUPERVISOR" \
+  --role leaf \
+  --route "$ROUTE" \
+  --agent "$AGENT" \
+  --fallback-agent "$GO_AGENT" \
+  --opencode "$OPENCODE" \
+  --quota "$QUOTA" \
+  -- "$@"

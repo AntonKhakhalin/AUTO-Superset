@@ -1,0 +1,574 @@
+[
+  {
+    "presetId": "custom",
+    "iconId": "droid",
+    "label": "AUTO · Fast Fix",
+    "command": "{auto_bin}/auto-muse-coordinator",
+    "args": [
+      "--profile",
+      "fast"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--prompt"
+    ],
+    "resumeArgs": [
+      "--session"
+    ],
+    "forkArgs": [
+      "--session",
+      "{sessionId}",
+      "--fork"
+    ],
+    "env": {
+      "SUPERSET_AUTO": "1",
+      "SUPERSET_AUTO_PROFILE": "fast",
+      "SUPERSET_OPENCODE_BIN": "{auto_bin}/opencode"
+    },
+    "provider": "opencode"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "droid",
+    "label": "AUTO · Feature",
+    "command": "{auto_bin}/auto-muse-coordinator",
+    "args": [
+      "--profile",
+      "feature"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--prompt"
+    ],
+    "resumeArgs": [
+      "--session"
+    ],
+    "forkArgs": [
+      "--session",
+      "{sessionId}",
+      "--fork"
+    ],
+    "env": {
+      "SUPERSET_AUTO": "1",
+      "SUPERSET_AUTO_PROFILE": "feature",
+      "SUPERSET_OPENCODE_BIN": "{auto_bin}/opencode"
+    },
+    "provider": "opencode"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "droid",
+    "label": "AUTO Muse Go XHigh",
+    "command": "{auto_bin}/auto-muse-coordinator",
+    "args": [
+      "--force-go"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--prompt"
+    ],
+    "resumeArgs": [
+      "--session"
+    ],
+    "forkArgs": [
+      "--session",
+      "{sessionId}",
+      "--fork"
+    ],
+    "env": {
+      "SUPERSET_AUTO": "1",
+      "SUPERSET_OPENCODE_BIN": "{auto_bin}/opencode"
+    },
+    "provider": "opencode-go"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "droid",
+    "label": "AUTO Gemini 3.8 Flash High",
+    "command": "/bin/zsh",
+    "args": [
+      "-lc",
+      "export SUPERSET_AUTO=1; exec agy --model gemini-3.8-flash-high --effort high --print-timeout 24h --add-dir \"$PWD\" \"$@\"",
+      "_"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "-p"
+    ],
+    "resumeArgs": [
+      "--conversation"
+    ],
+    "forkArgs": [],
+    "env": {
+      "SUPERSET_AUTO": "1"
+    },
+    "provider": "antigravity"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "droid",
+    "label": "AUTO Opus 5 High",
+    "command": "{auto_bin}/auto-claude",
+    "args": [
+      "--model",
+      "claude-opus-5",
+      "--effort",
+      "high"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [],
+    "resumeArgs": [
+      "--resume"
+    ],
+    "forkArgs": [
+      "--resume",
+      "{sessionId}",
+      "--fork-session"
+    ],
+    "env": {
+      "SUPERSET_AUTO": "1"
+    },
+    "provider": "claude"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "droid",
+    "label": "AUTO Terra High",
+    "command": "{auto_bin}/auto-codex",
+    "args": [
+      "--model",
+      "gpt-5.6-terra",
+      "-c",
+      "model_reasoning_effort=\"high\"",
+      "-c",
+      "model_verbosity=medium",
+      "-c",
+      "web_search=cached"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--"
+    ],
+    "resumeArgs": [
+      "resume"
+    ],
+    "forkArgs": [
+      "fork",
+      "{sessionId}"
+    ],
+    "env": {
+      "SUPERSET_AUTO": "1"
+    },
+    "provider": "codex"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "droid",
+    "label": "AUTO Emergency · Azure Terra",
+    "command": "{auto_bin}/auto-azure",
+    "args": [
+      "--model",
+      "openai/gpt-5.6-terra",
+      "--agent",
+      "terra-high"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--prompt"
+    ],
+    "resumeArgs": [
+      "--session"
+    ],
+    "forkArgs": [
+      "--session",
+      "{sessionId}",
+      "--fork"
+    ],
+    "env": {
+      "SUPERSET_AUTO": "1",
+      "SUPERSET_OPENCODE_BIN": "{auto_bin}/opencode"
+    },
+    "provider": "azure"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "opencode",
+    "label": "OC Free · Muse Spark 1.3 XHigh",
+    "command": "{auto_bin}/auto-muse-leaf",
+    "args": [],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--prompt"
+    ],
+    "resumeArgs": [
+      "--session"
+    ],
+    "forkArgs": [
+      "--session",
+      "{sessionId}",
+      "--fork"
+    ],
+    "env": {
+      "SUPERSET_MUSE_LEAF": "1",
+      "SUPERSET_OPENCODE_BIN": "{auto_bin}/opencode"
+    },
+    "provider": "opencode"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "codex",
+    "label": "Codex · Astra Ultra",
+    "command": "{auto_bin}/codex",
+    "args": [
+      "--model",
+      "gpt-6-astra",
+      "-c",
+      "model_reasoning_effort=ultra",
+      "-c",
+      "model_verbosity=medium",
+      "-c",
+      "web_search=cached"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--"
+    ],
+    "resumeArgs": [
+      "resume"
+    ],
+    "forkArgs": [
+      "fork",
+      "{sessionId}"
+    ],
+    "env": {},
+    "provider": "codex"
+  },
+  {
+    "presetId": "codex",
+    "iconId": null,
+    "label": "Codex",
+    "command": "codex",
+    "args": [],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--"
+    ],
+    "resumeArgs": [
+      "resume"
+    ],
+    "forkArgs": [
+      "fork",
+      "{sessionId}"
+    ],
+    "env": {},
+    "provider": "codex"
+  },
+  {
+    "presetId": "claude",
+    "iconId": null,
+    "label": "Claude",
+    "command": "claude",
+    "args": [],
+    "promptTransport": "argv",
+    "promptArgs": [],
+    "resumeArgs": [
+      "--resume"
+    ],
+    "forkArgs": [
+      "--resume",
+      "{sessionId}",
+      "--fork-session"
+    ],
+    "env": {},
+    "provider": "claude"
+  },
+  {
+    "presetId": "cursor-agent",
+    "iconId": null,
+    "label": "Cursor",
+    "command": "cursor-agent",
+    "args": [],
+    "promptTransport": "argv",
+    "promptArgs": [],
+    "resumeArgs": [
+      "--resume"
+    ],
+    "forkArgs": [],
+    "env": {},
+    "provider": "cursor"
+  },
+  {
+    "presetId": "cursor-agent",
+    "iconId": "cursor-agent",
+    "label": "Cursor Plan",
+    "command": "cursor-agent",
+    "args": [],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--mode=plan"
+    ],
+    "resumeArgs": [
+      "--resume"
+    ],
+    "forkArgs": [],
+    "env": {},
+    "provider": "cursor"
+  },
+  {
+    "presetId": "agy",
+    "iconId": null,
+    "label": "Anti · Gemini 3.1 Pro",
+    "command": "/bin/zsh",
+    "args": [
+      "-lc",
+      "exec agy --model gemini-3.1-pro-high --effort high --mode plan --add-dir \"$PWD\" \"$@\"",
+      "_"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "-i"
+    ],
+    "resumeArgs": [
+      "--conversation"
+    ],
+    "forkArgs": [],
+    "env": {},
+    "provider": "antigravity"
+  },
+  {
+    "presetId": "opencode",
+    "iconId": null,
+    "label": "OC · GLM-5.3-Flash High",
+    "command": "opencode",
+    "args": [
+      "--model",
+      "opencode-go/glm-5.3-flash",
+      "--agent",
+      "build"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--prompt"
+    ],
+    "resumeArgs": [
+      "--session"
+    ],
+    "forkArgs": [
+      "--session",
+      "{sessionId}",
+      "--fork"
+    ],
+    "env": {
+      "SUPERSET_OPENCODE_BIN": "{auto_bin}/opencode"
+    },
+    "provider": "opencode-go"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "opencode",
+    "label": "OC · DeepSeek V4 Pro",
+    "command": "opencode",
+    "args": [
+      "--model",
+      "opencode-go/deepseek-v4-pro",
+      "--agent",
+      "build"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--prompt"
+    ],
+    "resumeArgs": [
+      "--session"
+    ],
+    "forkArgs": [
+      "--session",
+      "{sessionId}",
+      "--fork"
+    ],
+    "env": {
+      "SUPERSET_OPENCODE_BIN": "{auto_bin}/opencode"
+    },
+    "provider": "opencode-go"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "opencode",
+    "label": "OC Azure · Luna Medium",
+    "command": "opencode",
+    "args": [
+      "--model",
+      "openai/gpt-5.6-luna",
+      "--agent",
+      "luna-build"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--prompt"
+    ],
+    "resumeArgs": [
+      "--session"
+    ],
+    "forkArgs": [
+      "--session",
+      "{sessionId}",
+      "--fork"
+    ],
+    "env": {
+      "SUPERSET_OPENCODE_BIN": "{auto_bin}/opencode"
+    },
+    "provider": "azure"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "agy",
+    "label": "Anti · Claude Opus 4.6",
+    "command": "/bin/zsh",
+    "args": [
+      "-lc",
+      "exec agy --model claude-opus-4-6-thinking --mode plan --add-dir \"$PWD\" \"$@\"",
+      "_"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "-i"
+    ],
+    "resumeArgs": [
+      "--conversation"
+    ],
+    "forkArgs": [],
+    "env": {},
+    "provider": "antigravity"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "opencode",
+    "label": "Azure · Luna Max",
+    "command": "opencode",
+    "args": [
+      "--model",
+      "openai/gpt-5.6-luna",
+      "--agent",
+      "luna-max"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--prompt"
+    ],
+    "resumeArgs": [
+      "--session"
+    ],
+    "forkArgs": [
+      "--session",
+      "{sessionId}",
+      "--fork"
+    ],
+    "env": {
+      "SUPERSET_OPENCODE_BIN": "{auto_bin}/opencode"
+    },
+    "provider": "azure"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "opencode",
+    "label": "Azure · Terra High",
+    "command": "opencode",
+    "args": [
+      "--model",
+      "openai/gpt-5.6-terra",
+      "--agent",
+      "terra-high"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--prompt"
+    ],
+    "resumeArgs": [
+      "--session"
+    ],
+    "forkArgs": [
+      "--session",
+      "{sessionId}",
+      "--fork"
+    ],
+    "env": {
+      "SUPERSET_OPENCODE_BIN": "{auto_bin}/opencode"
+    },
+    "provider": "azure"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "opencode",
+    "label": "Azure · Terra Max",
+    "command": "opencode",
+    "args": [
+      "--model",
+      "openai/gpt-5.6-terra",
+      "--agent",
+      "terra-max"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--prompt"
+    ],
+    "resumeArgs": [
+      "--session"
+    ],
+    "forkArgs": [
+      "--session",
+      "{sessionId}",
+      "--fork"
+    ],
+    "env": {
+      "SUPERSET_OPENCODE_BIN": "{auto_bin}/opencode"
+    },
+    "provider": "azure"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "opencode",
+    "label": "OC Go · Muse Spark 1.3 XHigh",
+    "command": "{auto_bin}/auto-muse-leaf",
+    "args": [
+      "--force-go"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "--prompt"
+    ],
+    "resumeArgs": [
+      "--session"
+    ],
+    "forkArgs": [
+      "--session",
+      "{sessionId}",
+      "--fork"
+    ],
+    "env": {
+      "SUPERSET_MUSE_LEAF": "1",
+      "SUPERSET_OPENCODE_BIN": "{auto_bin}/opencode"
+    },
+    "provider": "opencode-go"
+  },
+  {
+    "presetId": "custom",
+    "iconId": "agy",
+    "label": "Anti · Gemini 3.8 Flash High",
+    "command": "/bin/zsh",
+    "args": [
+      "-lc",
+      "exec agy --model gemini-3.8-flash-high --effort high --print-timeout 24h --add-dir \"$PWD\" \"$@\"",
+      "_"
+    ],
+    "promptTransport": "argv",
+    "promptArgs": [
+      "-p"
+    ],
+    "resumeArgs": [
+      "--conversation"
+    ],
+    "forkArgs": [],
+    "env": {},
+    "provider": "antigravity"
+  }
+]

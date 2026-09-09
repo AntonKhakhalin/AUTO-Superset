@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""Superset AUTO v9.8.23 foreground worker event collector.
+
+Normal v9.8.23 collection is state/event driven and never reads a terminal.
+If a worker is not registered with the workspace supervisor, this wrapper
+executes the preserved v9.8.21 watcher for fail-closed compatibility.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+from typing import Any
+
+MARKER = "SUPERSET_AUTO_WORKER_WATCH_V9823_EVENT_DRIVEN"
+HOME = Path(os.environ.get("SUPERSET_HOME_DIR") or (Path.home() / ".superset"))
+REGISTRY_ROOT = Path(os.environ.get("SUPERSET_AUTO_WORKER_REGISTRY_ROOT") or (os.environ.get("TMPDIR") or "/tmp")) / "superset-auto-worker-registry"
+WS_ROOT = Path(os.environ.get("SUPERSET_AUTO_WORKSPACE_SUPERVISOR_ROOT") or (HOME / "auto" / "workspace-supervisor"))
+LEGACY = Path(os.environ.get("SUPERSET_AUTO_WORKER_WATCH_LEGACY") or (HOME / "bin" / "auto-worker-watch.legacy-v9.8.21"))
+PRESENT = Path(os.environ.get("SUPERSET_AUTO_PRESENT_BIN") or (HOME / "bin" / "auto-present"))
+PASSIVE_LEASE = int(os.environ.get("SUPERSET_AUTO_PASSIVE_WAIT_LEASE_SECONDS", "2400"))
+HB_STALE = int(os.environ.get("SUPERSET_AUTO_WORKSPACE_HEARTBEAT_STALE_SECONDS", "120"))
+PEER_MAX_AGE = int(os.environ.get("SUPERSET_AUTO_WORKER_PEER_EVENT_MAX_AGE", "21600"))
+
+
+def safe_name(v: str) -> str:
+    return (re.sub(r"[^A-Za-z0-9._-]+", "_", v)[:180] or "unknown")
+
+
+def read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+def emit(obj: dict[str, Any], presentation: bool) -> None:
+    if presentation and PRESENT.is_file() and os.access(PRESENT, os.X_OK):
+        cp = subprocess.run([str(PRESENT), "worker-watch"], input=json.dumps(obj), text=True, check=False)
+        if cp.returncode == 0:
+            return
+    print(json.dumps(obj, separators=(",", ":"), ensure_ascii=False))
+
+
+def legacy_exec(argv: list[str]) -> None:
+    if not (LEGACY.is_file() and os.access(LEGACY, os.X_OK)):
+        print(f"ERROR: workspace-supervisor state unavailable and legacy watcher missing: {LEGACY}", file=sys.stderr)
+        raise SystemExit(70)
+    os.execv(str(LEGACY), [str(LEGACY), *argv])
+
+
+def state_exit(obj: dict[str, Any]) -> int | None:
+    state = str(obj.get("state") or "")
+    if state == "DONE":
+        return 0
+    if state == "FAILED_TERMINAL":
+        return 75
+    if state == "SUPERVISION_LOST":
+        return 76
+    return None
+
+
+def normalize_running(obj: dict[str, Any], requested: str, *, passive_expired: bool = False, rewatch_suppressed: bool = False, concurrent: bool = False) -> dict[str, Any]:
+    src = dict(obj)
+    phase = str(src.get("state") or "RUNNING")
+    if phase not in {"RUNNING", "WAITING_INPUT", "NATIVE_RESUMING", "AWAITING_HANDOFF"}:
+        phase = "RUNNING"
+    src["workerPhase"] = phase
+    src["state"] = "RUNNING"
+    src["requestedTerminalId"] = requested
+    src["concurrentEvent"] = concurrent
+    src["passiveLeaseExpired"] = passive_expired
+    src["rewatchSuppressed"] = rewatch_suppressed
+    src.setdefault("handoffAwaitingResident", False)
+    if phase == "WAITING_INPUT":
+        src["schedulerDirective"] = "WORKER_WAITING_INPUT: inspect the pending interaction; do not treat the worker as failed"
+        src["attentionRequired"] = True
+    elif phase == "NATIVE_RESUMING":
+        src["schedulerDirective"] = "NATIVE_RESUME_ACTIVE: automatic or explicit Superset same-session recovery owns this logical worker; do not launch a replacement writer"
+        src["nativeResumePending"] = True
+    elif passive_expired:
+        src["schedulerDirective"] = "PASSIVE_WAIT_LEASE_EXPIRED: if no useful independent work is schedulable and workspace supervision is healthy, renew one passive lease"
+    elif rewatch_suppressed:
+        src["schedulerDirective"] = "REWATCH_SUPPRESSED: schedule other useful work or use an explicit hard-dependency/no-other-work override"
+    else:
+        src["schedulerDirective"] = "YIELD_TO_SCHEDULER: workspace supervision continues"
+    return src
+
+
+def peer_urgent(reg_dir: Path, current_state_file: Path, requested: str) -> tuple[dict[str, Any], int] | None:
+    now = int(time.time())
+    if not reg_dir.is_dir():
+        return None
+    for p in reg_dir.glob("*.json"):
+        if p == current_state_file:
+            continue
+        obj = read_json(p)
+        if not obj or obj.get("state") not in {"FAILED_TERMINAL", "SUPERVISION_LOST"}:
+            continue
+        updated = int(obj.get("updatedEpoch") or 0)
+        if updated <= 0 or now - updated < 0 or now - updated > PEER_MAX_AGE:
+            continue
+        claim = Path(str(p) + ".reported")
+        try:
+            claim.mkdir()
+        except FileExistsError:
+            continue
+        except Exception:
+            continue
+        obj = dict(obj)
+        obj["requestedTerminalId"] = requested
+        obj["concurrentEvent"] = True
+        return obj, 75 if obj.get("state") == "FAILED_TERMINAL" else 76
+    return None
+
+
+def heartbeat_ok(workspace: str) -> tuple[bool, dict[str, Any] | None, int | None]:
+    hb = read_json(WS_ROOT / safe_name(workspace) / "heartbeat.json")
+    if not hb:
+        return False, None, None
+    epoch = int(hb.get("updatedEpoch") or 0)
+    age = int(time.time()) - epoch if epoch else 10**9
+    return age <= HB_STALE, hb, age
+
+
+def main() -> int:
+    raw_argv = sys.argv[1:]
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--workspace", required=True)
+    ap.add_argument("--terminal", required=True)
+    ap.add_argument("--handoff", required=True)
+    ap.add_argument("--label", default="")
+    ap.add_argument("--task", default="")
+    ap.add_argument("--state-file", default="")
+    ap.add_argument("--resident", action="store_true")
+    ap.add_argument("--once", action="store_true")
+    ap.add_argument("--hard-dependency-reason", default="")
+    ap.add_argument("--no-other-work", action="store_true")
+    ap.add_argument("--wait-seconds", type=int, default=60)
+    ap.add_argument("--interval", type=int, default=15)
+    ap.add_argument("--max-lines", type=int, default=120)
+    ap.add_argument("--presentation", action="store_true")
+    ns = ap.parse_args()
+
+    if ns.resident or os.environ.get("SUPERSET_AUTO_FORCE_LEGACY_WATCH") == "1":
+        legacy_exec(raw_argv)
+    if ns.wait_seconds < 0 or ns.interval < 1:
+        return 64
+    reg_dir = REGISTRY_ROOT / ns.workspace
+    state_file = Path(ns.state_file) if ns.state_file else reg_dir / f"{ns.terminal}.json"
+    state = read_json(state_file)
+    if not state or state.get("emitterMode") != "workspace-supervisor":
+        legacy_exec(raw_argv)
+
+    # Workspace supervisor heartbeat is the liveness contract in v9.8.23.
+    ok, hb, age = heartbeat_ok(ns.workspace)
+    if not ok:
+        obj = dict(state)
+        obj.update({
+            "state": "SUPERVISION_LOST",
+            "failureClass": "WORKSPACE_SUPERVISOR_HEARTBEAT_STALE",
+            "requestedTerminalId": ns.terminal,
+            "terminalId": state.get("terminalId") or ns.terminal,
+            "concurrentEvent": False,
+            "evidence": f"workspace supervisor heartbeat missing/stale (age={age})",
+            "schedulerDirective": "RECOVER_WORKSPACE_SUPERVISOR_BEFORE_WAITING_OR_REPLACEMENT",
+        })
+        emit(obj, ns.presentation)
+        return 76
+
+    final_rc = state_exit(state)
+    if final_rc is not None:
+        state = dict(state)
+        state["requestedTerminalId"] = ns.terminal
+        emit(state, ns.presentation)
+        return final_rc
+
+    peer = peer_urgent(reg_dir, state_file, ns.terminal)
+    if peer:
+        obj, rc = peer
+        emit(obj, ns.presentation)
+        return rc
+
+    yield_dir = reg_dir / ".foreground-yields"
+    yield_dir.mkdir(parents=True, exist_ok=True)
+    yield_file = yield_dir / f"{ns.terminal}.json"
+    override = bool(ns.hard_dependency_reason or ns.no_other_work)
+    if yield_file.exists() and not override:
+        obj = normalize_running(state, ns.terminal, rewatch_suppressed=True)
+        emit(obj, ns.presentation)
+        return 79
+
+    wait_seconds = PASSIVE_LEASE if ns.no_other_work and not ns.once else ns.wait_seconds
+    if ns.once:
+        wait_seconds = 0
+    start = time.monotonic()
+    initial_phase = str(state.get("state") or "RUNNING")
+    initial_updated = int(state.get("updatedEpoch") or 0)
+
+    while True:
+        ok, hb, age = heartbeat_ok(ns.workspace)
+        if not ok:
+            obj = dict(state)
+            obj.update({
+                "state": "SUPERVISION_LOST",
+                "failureClass": "WORKSPACE_SUPERVISOR_HEARTBEAT_STALE",
+                "requestedTerminalId": ns.terminal,
+                "concurrentEvent": False,
+                "evidence": f"workspace supervisor heartbeat became stale (age={age})",
+                "schedulerDirective": "RECOVER_WORKSPACE_SUPERVISOR_BEFORE_WAITING_OR_REPLACEMENT",
+            })
+            emit(obj, ns.presentation)
+            return 76
+
+        peer = peer_urgent(reg_dir, state_file, ns.terminal)
+        if peer:
+            obj, rc = peer
+            emit(obj, ns.presentation)
+            return rc
+
+        latest = read_json(state_file) or state
+        rc = state_exit(latest)
+        if rc is not None:
+            try:
+                yield_file.unlink()
+            except Exception:
+                pass
+            latest = dict(latest)
+            latest["requestedTerminalId"] = ns.terminal
+            emit(latest, ns.presentation)
+            return rc
+
+        phase = str(latest.get("state") or "RUNNING")
+        updated = int(latest.get("updatedEpoch") or 0)
+        # Meaningful event-driven phase changes regain coordinator control early.
+        if (phase != initial_phase or updated != initial_updated) and phase in {"WAITING_INPUT", "NATIVE_RESUMING"}:
+            obj = normalize_running(latest, ns.terminal)
+            emit(obj, ns.presentation)
+            return 79
+
+        if ns.once:
+            yield_file.write_text(json.dumps({"workspaceId": ns.workspace, "terminalId": ns.terminal, "yieldedEpoch": int(time.time())}), encoding="utf-8")
+            obj = normalize_running(latest, ns.terminal)
+            emit(obj, ns.presentation)
+            return 79
+
+        elapsed = time.monotonic() - start
+        if wait_seconds > 0 and elapsed >= wait_seconds:
+            passive_expired = bool(ns.no_other_work)
+            if not passive_expired:
+                yield_file.write_text(json.dumps({"workspaceId": ns.workspace, "terminalId": ns.terminal, "yieldedEpoch": int(time.time())}), encoding="utf-8")
+            obj = normalize_running(latest, ns.terminal, passive_expired=passive_expired)
+            emit(obj, ns.presentation)
+            return 79
+        state = latest
+        time.sleep(1)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
