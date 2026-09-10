@@ -1,6 +1,6 @@
 # AUTO-Superset
 
-[![AUTO](https://img.shields.io/badge/AUTO-9.9.5--public.1-blue)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v1.1-blue)](https://github.com/AntonKhakhalin/AUTO-Superset/releases/tag/v1.1)
 [![Superset](https://img.shields.io/badge/Superset-1.28.0%2B-6f42c1)](https://github.com/superset-sh/superset/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)](#compatibility-and-limits)
 [![Status](https://img.shields.io/badge/status-public%20preview-orange)](#compatibility-and-limits)
@@ -16,7 +16,7 @@ AUTO-Superset adds two workflows to [Superset](https://superset.sh): **Fast Fix*
 
 > This is an independent community project. Superset and each provider CLI are installed separately. Offline installation/recovery checks are included; a live macOS smoke test is still required before relying on unattended operation.
 
-[**Superset 1.28 update**](docs/superset-1.28.md) · [Quick start](#quick-start) · [Setup guide](docs/setup.md) · [Workflow](docs/workflow.md) · [Troubleshooting](docs/troubleshooting.md) · [Source audit](docs/source-audit.md)
+[**Get v1.1**](https://github.com/AntonKhakhalin/AUTO-Superset/releases/tag/v1.1) · [Superset 1.28 update](docs/superset-1.28.md) · [Quick start](#quick-start) · [Setup guide](docs/setup.md) · [Workflow](docs/workflow.md) · [Troubleshooting](docs/troubleshooting.md) · [Source audit](docs/source-audit.md)
 
 ## Already use Superset? Start here
 

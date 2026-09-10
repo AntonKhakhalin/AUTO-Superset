@@ -1,0 +1,46 @@
+name: Publish release
+on:
+  push:
+    branches: [main]
+    paths: [release.json]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install validation dependencies
+        run: sudo apt-get update && sudo apt-get install -y zsh jq
+      - name: Validate public source
+        run: |
+          python3 -B scripts/validate.py
+          python3 -B scripts/scan_public.py --tracked
+      - name: Prepare source ZIP and checksum
+        id: package
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: python3 -B scripts/prepare_release.py
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ steps.package.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.package.outputs.title }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "dist/AUTO-Superset-$RELEASE_TAG.zip" dist/SHA256SUMS.txt \
+            --target "$SOURCE_SHA" \
+            --title "$RELEASE_TITLE" \
+            --notes-file "docs/releases/$RELEASE_TAG.md" \
+            --latest
