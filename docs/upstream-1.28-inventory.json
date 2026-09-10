@@ -1,0 +1,3210 @@
+{
+  "baseTag": "desktop-v1.27.0",
+  "baseCommit": "a32cd9091928efe75cf9c1fbaeb4e87df60a91c0",
+  "headTag": "desktop-v1.28.0",
+  "headCommit": "a415227dc25f806dd3ef6bf05b464adba5ac08fb",
+  "reviewScope": "Complete commit and net-file inventory; focused code review of AUTO-facing recovery, identity, CLI, migration and failure contracts. Not a line-by-line audit of every application/UI file.",
+  "commits": [
+    {
+      "sha": "4fff6157b2392089f540f6e0f9316dea38660356",
+      "subject": "fix(desktop): relaunch agents on the host when the default account switches (#7253)"
+    },
+    {
+      "sha": "e9a3aaa311fdf612c50f7e71277d46dd572177fc",
+      "subject": "chore(desktop): bump version to 1.27.0 (host-service 1.26.0 -> 1.27.0, cli 1.26.0 -> 1.27.0) (#7261)"
+    },
+    {
+      "sha": "fa21993a87ca491dd13791f833132da7152df4aa",
+      "subject": "feat(desktop): open the PR summary as a workspace pane from the Changes pane (#7244)"
+    },
+    {
+      "sha": "672885f204f81763d2fb0183e707504a7ddd8756",
+      "subject": "feat(marketing): add a Content-Security-Policy header to superset.sh (#7265)"
+    },
+    {
+      "sha": "b2c69d267724e92d20abc777f5c94d2ff90b1f59",
+      "subject": "fix(marketing): resolve search indexing and localized rendering issues (#7268)"
+    },
+    {
+      "sha": "451ad025d4f1a4c9a87b10ef215ccd176a23ec52",
+      "subject": "fix(desktop): preserve cursor position in terminal rich input (#7271)"
+    },
+    {
+      "sha": "a8157ae5423d26267baa9b39a76992554cfcca63",
+      "subject": "fix(sentry): turn tracing off everywhere and stop reporting updater transport errors (#7273)"
+    },
+    {
+      "sha": "ad01d003774940240687f159e301630da3c5cd2a",
+      "subject": "fix(desktop): keep workspace picker searches open (#7272)"
+    },
+    {
+      "sha": "5acfa1b2d1ad5f5f248a8a433bb9b5903f1a5415",
+      "subject": "fix(desktop): classify intentional git worker aborts as non-500s (#7277)"
+    },
+    {
+      "sha": "fbad0ee61d39bcb83f9b2bb2599c0fb41421199d",
+      "subject": "fix(host-service): classify a hollow nested-repository .git and a broken Xcode git shim as environmental (#7278)"
+    },
+    {
+      "sha": "01d939887385939de56879b67b5f599c824b7b53",
+      "subject": "fix(host-service): bound transcript line reads so one corrupt file cannot kill the usage worker (#7279)"
+    },
+    {
+      "sha": "31baaf6337ebde050a11d1f8a21a10999dd51fc8",
+      "subject": "fix(desktop): close a browser pane whose page closes itself and search unparseable addresses (#7282)"
+    },
+    {
+      "sha": "54abebb82661a2c151a154ed48f09ac9c037cefd",
+      "subject": "fix(host-service): stop the login-shell env probe from leaking pipe descriptors (#7280)"
+    },
+    {
+      "sha": "16aad61a128dba06cc6b0cb090922b4909076567",
+      "subject": "fix(desktop): classify authorization, launchd, cache-path, 5xx and staging updater failures as environmental (#7283)"
+    },
+    {
+      "sha": "79a25b009fce4f52d17608cce8d44b2553f79846",
+      "subject": "fix(desktop): refetch Changes pane patches when git state changes (#7285)"
+    },
+    {
+      "sha": "7d1ee10260f8e8815678441f8bc2179d35b622bf",
+      "subject": "fix(desktop): cancel timed-out git tasks in the worker instead of terminating the thread (#7286)"
+    },
+    {
+      "sha": "cfdabe2daa3f65796365b2ff0dbc7b578b9eaf2a",
+      "subject": "fix(marketing): stop the API limiter and stale data-cache shapes from 500ing profile pages (#7281)"
+    },
+    {
+      "sha": "4cd34e3fdcf012874fad17f14635879b028217d9",
+      "subject": "fix(marketing): don't let a refused profile read get cached (#7287)"
+    },
+    {
+      "sha": "abd47ad8d332cf5e5b9dd0dbceb40c29670475fb",
+      "subject": "fix(desktop): decide a missing path ourselves before opening it externally (#7288)"
+    },
+    {
+      "sha": "0b65545876e617986da25a1d51d7d7f1ad308558",
+      "subject": "Revert \"fix(marketing): don't let a refused profile read get cached (#7287)\" (#7290)"
+    },
+    {
+      "sha": "d2a867c4f3248938db4a44b77530c275ccafab5d",
+      "subject": "fix(desktop): report why a terminal PTY exited before it was ready (#7284)"
+    },
+    {
+      "sha": "2d7417f6ee0c4b82ac505a8bbc0506c4550e5857",
+      "subject": "fix(desktop): apply local-db migrations by identity, not by timestamp watermark (#7291)"
+    },
+    {
+      "sha": "4c4f83f7964d57453ee200d1b2358eac1c6e0a14",
+      "subject": "fix(desktop): key the onboarding gate on the rendered route, not the pending one (#7293)"
+    },
+    {
+      "sha": "e3c29af21e8e5fd56f2f2f1bf855e22c9713c4bf",
+      "subject": "fix(marketing): stop routing one-character paths to the profile page (#7295)"
+    },
+    {
+      "sha": "79da5292edcb8d3ee047ff5d1c2919a407a5e220",
+      "subject": "fix(desktop): wait for the terminal daemon on the right signal, and say what went wrong (#7299)"
+    },
+    {
+      "sha": "50c99eeb732e082fd7abaffb04796eafb76fba6a",
+      "subject": "fix(host-service): apply host.db migrations by identity, not by timestamp watermark (#7300)"
+    },
+    {
+      "sha": "70306e9c90a39e0f0916c4a53bf00e494ea0bc41",
+      "subject": "fix(agent-setup): preserve agent identity and enable OpenCode session resume (#7263)"
+    },
+    {
+      "sha": "110b2c6fc5fa0fe7caf84cf29718a81962bb8e21",
+      "subject": "fix(host-service): bound the diff patch, and stop depending on the launch directory (#7303)"
+    },
+    {
+      "sha": "831e58651fd075ecdf9f477ac0ff5236a1d6dfc2",
+      "subject": "fix(api): acknowledge Linear webhooks before fanning them out (#7289)"
+    },
+    {
+      "sha": "2dbaef6855130cd33b29e982ee4fa85b4974f28e",
+      "subject": "fix(desktop): launch host-service through the crash-port-clearing spawn-helper (#7306)"
+    },
+    {
+      "sha": "4d5470332a702fa96b22636de4d91192715d0db0",
+      "subject": "fix(api): keep webhook bookkeeping out of the failure path, and select only the host columns dispatch reads (#7307)"
+    },
+    {
+      "sha": "bfccda95374961255fd35010efafa6f0d2d8ea04",
+      "subject": "fix(web): stop the mesh gradient's CSS-variable poll when the canvas unmounts (#7308)"
+    },
+    {
+      "sha": "ec99171966f304cdb99fa32e9eba9524fe1f2d3b",
+      "subject": "fix(desktop): answer a terminal attach that races the session being reaped (#7309)"
+    },
+    {
+      "sha": "4422bbca7eb858479fa18fc36649c6d0db5f53f7",
+      "subject": "fix(desktop): stop the stale 'Host unreachable' flash and soften the host gate (#7264)"
+    },
+    {
+      "sha": "9fa67410223d805850cbc8c3de3b0fc30dd958f5",
+      "subject": "fix(desktop): stop re-entering Squirrel.Mac staging while an update is already staged (#7311)"
+    },
+    {
+      "sha": "66a52cae5662bdf29f338458a4cf4a3ef93dee41",
+      "subject": "feat(desktop): show host versions and update standalone hosts (#7270)"
+    },
+    {
+      "sha": "5f2e6bc853666ed67b53dd9c4b240cf4cb50af6e",
+      "subject": "fix(desktop): keep workspace panes usable while reconnecting (#7314)"
+    },
+    {
+      "sha": "c82d19d486d79ea3914d88b78a97af27bdbb89cf",
+      "subject": "fix(desktop): keep account names out of host-service crash tails (#7326)"
+    },
+    {
+      "sha": "889d977080a278df9a062f65ee98a685494fd598",
+      "subject": "fix(workspace-fs): bound what nested-repo scans hold while watchers attach (#7327)"
+    },
+    {
+      "sha": "13b539e70513bb519d457bd83a96896ca34e0c56",
+      "subject": "chore(host-service): log worker results big enough to abort serialization (#7328)"
+    },
+    {
+      "sha": "894610b411b2a3635b890e4926abd0598abae9be",
+      "subject": "fix(desktop): stop a disposed xterm terminal from scheduling render frames (#7313)"
+    },
+    {
+      "sha": "fb84c3187f266461c75c3a03d6542aa06cb2ce38",
+      "subject": "fix(api): bound the Linear sweep's lock hold and its QStash publishes (#7332)"
+    },
+    {
+      "sha": "8306361e83e4e27e3145b909177aab2c22c078bf",
+      "subject": "fix(desktop): stop trpc-electron reading a disposed frame on navigation (#7335)"
+    },
+    {
+      "sha": "6a7ec51485fced5aefdb8cf9dd51ecc57f6a3992",
+      "subject": "feat(skills): add an integrations skill for calling plugin MCP tools (#7242)"
+    },
+    {
+      "sha": "c203be538be3d61fd7a7375c608a6f1e748d08ee",
+      "subject": "feat(marketing): add cloud design partner signup (#7316)"
+    },
+    {
+      "sha": "ce1bca9a6988c3feea9c23d5896125ba46957c56",
+      "subject": "chore: drop the last Electric traces — subprocessor entry and orphaned Caddyfile (#7334)"
+    },
+    {
+      "sha": "9e42513422553781d3992c080c1b527c4c0dce0d",
+      "subject": "fix(desktop): migrate v1 groups to v2 tags (#7333)"
+    },
+    {
+      "sha": "9d341c171f64cc5276b0460b51c4cc0f112b68b0",
+      "subject": "fix(host-service): classify a deliberate worker abort as a non-500 (#7329)"
+    },
+    {
+      "sha": "e74e919d7e6d79d69614db01879e98b527ea1e12",
+      "subject": "fix(api): bound the redispatch sweep's advisory-lock transaction (#7330)"
+    },
+    {
+      "sha": "51993554c8d098533004721afbf8583c2eb75ed7",
+      "subject": "fix(host-service): delete worktrees pinned by a read-only directory (#7331)"
+    },
+    {
+      "sha": "1024bf1802cae2b8fa133bd58c66da15cbfc112f",
+      "subject": "fix(marketing): match cloud page icon to banner (#7344)"
+    },
+    {
+      "sha": "1019540c0be5069eb5ff3ebb22e5707a42e0999d",
+      "subject": "feat(desktop): add Pages onboarding and polish creation flows (#7339)"
+    },
+    {
+      "sha": "b68439219123da2ef901bf2461c779e642130a97",
+      "subject": "feat(desktop): copy a shareable link to an automation (#7347)"
+    },
+    {
+      "sha": "5efcbc69e93928e9b135bb19150477e59134bae3",
+      "subject": "fix(desktop): keep a stale diff from crashing the reviewer pane (#7348)"
+    },
+    {
+      "sha": "014e9e9b348c883c04a48a4ed8036a2b765d59ae",
+      "subject": "feat(mobile): keep switched-to terminals warm with a cached buffer (#7346)"
+    },
+    {
+      "sha": "3eb2fc9e6a5e9c07126bd743cdf0aea6d2c09d0f",
+      "subject": "fix(mobile): stop leaking iOS internals into error alerts, and retry the blip behind them (#7340)"
+    },
+    {
+      "sha": "397c4c2bcab279e694271f4311725cff46865118",
+      "subject": "feat(desktop): create a cloud workspace from the sidebar (#7352)"
+    },
+    {
+      "sha": "0c775a8163235d2d9d7afd14ec8bfa62a9b204fc",
+      "subject": "feat(pages): split comment mode from the comments panel, theme published pages (#7312)"
+    },
+    {
+      "sha": "2b9185523f2cd9234ac27d1373010f0604c4b3e7",
+      "subject": "refactor(desktop): remove the v2 new-workspace modal (#7353)"
+    },
+    {
+      "sha": "a4ec9ee5f20bfc37a336732623556c2b41b9259b",
+      "subject": "fix(desktop): stop partial module mocks leaking across test files (#7337)"
+    },
+    {
+      "sha": "aa2793bb2e15898a3edffbfeb3672242057b639e",
+      "subject": "feat(mobile): remember the last session tab per workspace (#7342)"
+    },
+    {
+      "sha": "f495395b511a4a2ee722d624229824991baf7162",
+      "subject": "fix(automations): name the organization instead of a dead-end 404 (#7355)"
+    },
+    {
+      "sha": "e978321175d20320d2d0909d2646c04cabd7da60",
+      "subject": "feat(billing): close the paywall funnel through Stripe payment outcomes (#7338)"
+    },
+    {
+      "sha": "2d01f51202f248f7c41acf0c10d97263db31f1c9",
+      "subject": "feat(mobile): agent status on the Lock Screen and Dynamic Island (#7356)"
+    },
+    {
+      "sha": "ca1d178f9d9db78cc4aa021e2041f8e1a232fb4e",
+      "subject": "fix(terminal): drop clients that stop answering so the PTY size unwedges (#7358)"
+    },
+    {
+      "sha": "a415227dc25f806dd3ef6bf05b464adba5ac08fb",
+      "subject": "chore(desktop): bump version to 1.28.0 (host-service 1.27.0 -> 1.28.0, cli 1.27.0 -> 1.28.0)"
+    }
+  ],
+  "files": [
+    {
+      "path": ".env.example",
+      "status": "modified",
+      "sha": "e2de92c16ee2e6e825a851f62d7b52e4477217b0"
+    },
+    {
+      "path": ".env.local.example",
+      "status": "modified",
+      "sha": "50020e16dadaf6e0ce6bcaea472bfeddbe06b00f"
+    },
+    {
+      "path": ".github/workflows/deploy-preview.yml",
+      "status": "modified",
+      "sha": "66ed04d9115cbe51bf7f4b254b54a708be137bf5"
+    },
+    {
+      "path": ".github/workflows/deploy-production.yml",
+      "status": "modified",
+      "sha": "d9ae38c4fbe379e8da6bfd0447c01c5c16974a89"
+    },
+    {
+      "path": "apps/admin/sentry.edge.config.ts",
+      "status": "modified",
+      "sha": "2b03626af06a1e4467fb446183e22e7a56c7122b"
+    },
+    {
+      "path": "apps/admin/sentry.server.config.ts",
+      "status": "modified",
+      "sha": "2b03626af06a1e4467fb446183e22e7a56c7122b"
+    },
+    {
+      "path": "apps/admin/src/instrumentation-client.ts",
+      "status": "modified",
+      "sha": "2755ba88c8fccb4ac4dae0cd51e0cf88b930f33c"
+    },
+    {
+      "path": "apps/api/sentry.edge.config.ts",
+      "status": "modified",
+      "sha": "9b9ce7f699ce435e9a71784b7803d4e751ed8aeb"
+    },
+    {
+      "path": "apps/api/sentry.server.config.ts",
+      "status": "modified",
+      "sha": "3f6987ae691196f3006f9d57f020607be6f430b4"
+    },
+    {
+      "path": "apps/api/src/app/api/automations/evaluate/route.ts",
+      "status": "modified",
+      "sha": "fb8b0e9e383a2fda528e5d1d8054ad73e68d96fa"
+    },
+    {
+      "path": "apps/api/src/app/api/github/webhook/route.ts",
+      "status": "modified",
+      "sha": "3ffdc8ba755369cd8328ea623c038ed5437ae1c5"
+    },
+    {
+      "path": "apps/api/src/app/api/integrations/linear/jobs/process-delivery/partitionDay.test.ts",
+      "status": "added",
+      "sha": "59f74b6320f87c5ee634327aa24131cce89c45d0"
+    },
+    {
+      "path": "apps/api/src/app/api/integrations/linear/jobs/process-delivery/partitionDay.ts",
+      "status": "added",
+      "sha": "f36f508bef980a7857732f3b1e2c473f4d1b2a37"
+    },
+    {
+      "path": "apps/api/src/app/api/integrations/linear/jobs/process-delivery/route.ts",
+      "status": "added",
+      "sha": "2863a8e1c625ff795fe3c3fac7af3ca00b35c791"
+    },
+    {
+      "path": "apps/api/src/app/api/integrations/linear/jobs/sweep-abandoned/planSweep.test.ts",
+      "status": "added",
+      "sha": "bc6137c1ef1aeadec97ae9bd54426ed15b060fe5"
+    },
+    {
+      "path": "apps/api/src/app/api/integrations/linear/jobs/sweep-abandoned/planSweep.ts",
+      "status": "added",
+      "sha": "8d85adb4f733d86c0ece794077da0c75771ec53b"
+    },
+    {
+      "path": "apps/api/src/app/api/integrations/linear/jobs/sweep-abandoned/route.ts",
+      "status": "added",
+      "sha": "4c5012e147b0a04142ec01ed15c2a65076e4eb73"
+    },
+    {
+      "path": "apps/api/src/app/api/integrations/linear/webhook/deliveryIds.test.ts",
+      "status": "added",
+      "sha": "76168bfea32033d02efe3d19b30140d94dd34cfa"
+    },
+    {
+      "path": "apps/api/src/app/api/integrations/linear/webhook/deliveryIds.ts",
+      "status": "added",
+      "sha": "00beeb40364797ca7eb0205fecf44cbe752cc855"
+    },
+    {
+      "path": "apps/api/src/app/api/integrations/linear/webhook/processDelivery.ts",
+      "status": "added",
+      "sha": "ef2ba28bdb6dcbea8c87b65881197a986a6329b0"
+    },
+    {
+      "path": "apps/api/src/app/api/integrations/linear/webhook/queue.ts",
+      "status": "added",
+      "sha": "b628e466dab6094d5724a25a513e9fd15ab97652"
+    },
+    {
+      "path": "apps/api/src/app/api/integrations/linear/webhook/route.test.ts",
+      "status": "added",
+      "sha": "c5fa5b8f1079952a1c8fe0e9dab9da39d3820801"
+    },
+    {
+      "path": "apps/api/src/app/api/integrations/linear/webhook/route.ts",
+      "status": "modified",
+      "sha": "ac4f6ebe5f274bfd868772794b5f705d36ca60ba"
+    },
+    {
+      "path": "apps/api/src/lib/automations/redispatchUndispatched.ts",
+      "status": "modified",
+      "sha": "7105e26be830d6cd1546e9d753221905b8846063"
+    },
+    {
+      "path": "apps/api/src/lib/databaseErrorMessage.ts",
+      "status": "added",
+      "sha": "88f77704cb688a25fd1aa1120bb1a018655fa4f7"
+    },
+    {
+      "path": "apps/api/src/lib/ingest/recordWebhookDelivery.ts",
+      "status": "modified",
+      "sha": "1ed3b6f8af90d3cf2e900a7fc41c7e07b0022996"
+    },
+    {
+      "path": "apps/api/src/lib/singleFlight.ts",
+      "status": "modified",
+      "sha": "6abbd6fbcd64a36a242acb50f26ad9a6ccc9646e"
+    },
+    {
+      "path": "apps/desktop/package.json",
+      "status": "modified",
+      "sha": "4438a331127c6fd05a88d81434b098ca07dd6132"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/routers/changes/workers/git-task-runner.test.ts",
+      "status": "added",
+      "sha": "3d8887a66049fbfe92091adb62a42861834248e6"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/routers/changes/workers/git-task-runner.ts",
+      "status": "modified",
+      "sha": "d1919a80d381b28a0ee4d0e1cb153d2d7857f4c5"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/routers/external/helpers.test.ts",
+      "status": "modified",
+      "sha": "09dc83dd814128c062ca35f3c554ac0da084be7d"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/routers/external/helpers.ts",
+      "status": "modified",
+      "sha": "9253bc37536a5be4f95c6846be3e5e8d25f9593a"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/routers/external/index.ts",
+      "status": "modified",
+      "sha": "1dd4a6bac7746270ae0c8a53c29c7011249a9786"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/routers/migration/index.ts",
+      "status": "modified",
+      "sha": "81ba516dedb695fd35e075b671ad709c2f966090"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/routers/terminal/terminal.ts",
+      "status": "modified",
+      "sha": "e90f560e7b3fe6487a24c7465e4fa28cdcf05b41"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/routers/terminal/utils/terminal-spawn-error.test.ts",
+      "status": "added",
+      "sha": "f96a4ed970a32ce6cc95e82590a3254b1424c3b7"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/routers/terminal/utils/terminal-spawn-error.ts",
+      "status": "added",
+      "sha": "fcc208d9fd09e9fc0b01544947228e500efd92f5"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/routers/workspaces/utils/git-client.ts",
+      "status": "modified",
+      "sha": "81911a6e8398851d5d247719645270bfa10d633f"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/workers/WorkerTaskRunner.test.ts",
+      "status": "modified",
+      "sha": "2818eeb104ccf0164b85b6e237bece59f7ab0a4e"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/workers/WorkerTaskRunner.ts",
+      "status": "modified",
+      "sha": "f94161415fb9ddfd64ef65eed4debb8021ee3203"
+    },
+    {
+      "path": "apps/desktop/src/lib/trpc/workers/worker-task-protocol.ts",
+      "status": "modified",
+      "sha": "1fe1fd52db6aff952c50f6a2f4a1c3c3ecf1d0c5"
+    },
+    {
+      "path": "apps/desktop/src/main/git-task-worker.ts",
+      "status": "modified",
+      "sha": "0aac9e7e0a1569eefe807ae97a05cb011440dc84"
+    },
+    {
+      "path": "apps/desktop/src/main/host-service/index.ts",
+      "status": "modified",
+      "sha": "1e66386e09076a81a42fe694d6e0b0a6dfe22ee8"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/auto-updater.ts",
+      "status": "modified",
+      "sha": "a90e851a08fa6795955bdc76487a859027f6eba8"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/host-service-coordinator.test.ts",
+      "status": "modified",
+      "sha": "b415f0eb2500f470917f8486beff1b0498243bdc"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/host-service-coordinator.ts",
+      "status": "modified",
+      "sha": "313dd3b12623f5ddea30767a0f22ab566c1a47cb"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/host-service-utils.test.ts",
+      "status": "added",
+      "sha": "a18ddfac2412456075e7601f874d7cc271c162ba"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/host-service-utils.ts",
+      "status": "modified",
+      "sha": "6d1902c84cdf31374d8f2c1edcac1fc62fed2073"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/local-db/index.ts",
+      "status": "modified",
+      "sha": "296c0daa938e93df1e674d088c76c185ab1d915f"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/local-db/journal.test.ts",
+      "status": "added",
+      "sha": "a526cbb4a605a2ffa790379624b48546dbbb7e9c"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/sentry.ts",
+      "status": "modified",
+      "sha": "f9ba0f4e0a574d304572038d7a297a4482edf6f5"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/terminal-host/client.ts",
+      "status": "modified",
+      "sha": "5dcb757745d4b227254dc57889fc9ff75934e9c2"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/terminal-host/headless-emulator.ts",
+      "status": "modified",
+      "sha": "cf0f2417ff1d2723b2c5541558bf4ece3c2a5d3a"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/terminal-host/types.ts",
+      "status": "modified",
+      "sha": "0ab3d6d158f436707985d9c4720fcba6c8577ce9"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/terminal/errors.ts",
+      "status": "modified",
+      "sha": "41844def27c25940ae27ad109d1f1a8fa16611b2"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/update-error-classification.test.ts",
+      "status": "modified",
+      "sha": "87107d6c89e957dc8cd2a78138c05a0f3e9af600"
+    },
+    {
+      "path": "apps/desktop/src/main/lib/update-error-classification.ts",
+      "status": "modified",
+      "sha": "fb5caea2e2f59ddf42fb92b86a3ee98db3cd4dda"
+    },
+    {
+      "path": "apps/desktop/src/main/terminal-host/index.ts",
+      "status": "modified",
+      "sha": "8da7c6fa168c32bf6e112b92511d5412abdcca74"
+    },
+    {
+      "path": "apps/desktop/src/main/terminal-host/session.ts",
+      "status": "modified",
+      "sha": "3722faa68c988b83d6190cef6146b447ee86267b"
+    },
+    {
+      "path": "apps/desktop/src/main/terminal-host/terminal-host.test.ts",
+      "status": "modified",
+      "sha": "569e5d60bea06158cb82c07b570c65c47d51c0de"
+    },
+    {
+      "path": "apps/desktop/src/main/terminal-host/terminal-host.ts",
+      "status": "modified",
+      "sha": "2de05c924f274610b43b73459d5dc2fbeb1251a4"
+    },
+    {
+      "path": "apps/desktop/src/renderer/commandPalette/core/ContextProvider.tsx",
+      "status": "modified",
+      "sha": "ca2133f83be4b5e8fa55af15abaeef3e671a9bf9"
+    },
+    {
+      "path": "apps/desktop/src/renderer/commandPalette/core/types.ts",
+      "status": "modified",
+      "sha": "41e2ae5c06ead8be98d2ece46756673751347f17"
+    },
+    {
+      "path": "apps/desktop/src/renderer/commandPalette/modules/workspace/commands.tsx",
+      "status": "modified",
+      "sha": "6ac93f15e0757c1b2a41e81f65d42c2bb0af79da"
+    },
+    {
+      "path": "apps/desktop/src/renderer/components/NewWorkspaceModal/components/PromptGroup/PromptGroup.test.ts",
+      "status": "modified",
+      "sha": "ab8177446bb8d54cf9c1af3a18452ede46ea3ccf"
+    },
+    {
+      "path": "apps/desktop/src/renderer/components/NewWorkspaceModal/components/PromptGroup/PromptGroup.tsx",
+      "status": "modified",
+      "sha": "8e7246c3dab23443672dbd4f546cfa8a73ad439d"
+    },
+    {
+      "path": "apps/desktop/src/renderer/components/NewWorkspaceModal/components/PromptGroup/components/CompareBaseBranchPickerInline/CompareBaseBranchPickerInline.test.tsx",
+      "status": "added",
+      "sha": "a7fab1b2a8699a4390b3435e8e2242084815fc96"
+    },
+    {
+      "path": "apps/desktop/src/renderer/components/NewWorkspaceModal/components/PromptGroup/components/CompareBaseBranchPickerInline/CompareBaseBranchPickerInline.tsx",
+      "status": "added",
+      "sha": "aec85d304c05f612e06ce58df7503e56a92d14ea"
+    },
+    {
+      "path": "apps/desktop/src/renderer/components/NewWorkspaceModal/components/PromptGroup/components/CompareBaseBranchPickerInline/index.ts",
+      "status": "added",
+      "sha": "73d967726cb58ffd8673a2a692316d38d7ead3c2"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-service/useGitStatus/useGitStatus.ts",
+      "status": "modified",
+      "sha": "231ed9f52e01b5496920f1a6dececbd21bc9d696"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-service/useHostServiceInfo/index.ts",
+      "status": "added",
+      "sha": "fa9d07b038d46dc1382321c265e271acdc2c8d9b"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-service/useHostServiceInfo/useHostServiceInfo.ts",
+      "status": "added",
+      "sha": "492ef8d7ee006d9568e02c9dd1c3c04a2a3c209b"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-service/useHostServiceInfo/useHostServiceInfo.utils.test.ts",
+      "status": "added",
+      "sha": "fb59cf9f1d1756617770bec92e64e7e467afecb1"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-service/useHostServiceInfo/useHostServiceInfo.utils.ts",
+      "status": "added",
+      "sha": "e1956c440849bc02f30e1f759a84061264feefd9"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-service/useHostServiceUpdate/index.ts",
+      "status": "added",
+      "sha": "8bd5ecfcbdf0031eb5502096fe7646f70f81de01"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-service/useHostServiceUpdate/useHostServiceUpdate.ts",
+      "status": "added",
+      "sha": "dca7b25857cffc1c4cacbd92a412e1431c3093c0"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-service/useHostServiceUpdate/useHostServiceUpdate.utils.test.ts",
+      "status": "added",
+      "sha": "9f3a9e024c9aa3d2320164a8dff4d958849c54ec"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-service/useHostServiceUpdate/useHostServiceUpdate.utils.ts",
+      "status": "added",
+      "sha": "05844703fbdbe069ed5fdcd22e53f946c8632a86"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-service/useTerminalResumeCandidate/useTerminalResumeCandidate.ts",
+      "status": "modified",
+      "sha": "8774ce6bed99a14193b9cdb3c2f6ca7a021401d8"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-service/useTerminalResumedSuccessor/index.ts",
+      "status": "added",
+      "sha": "236381671c8d288ba2e633ef6427ecaaa9bf09e2"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-service/useTerminalResumedSuccessor/useTerminalResumedSuccessor.ts",
+      "status": "added",
+      "sha": "c4a103d0eb77c60e9161e4a1baea53f516b75965"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-version/useHostVersionState/index.ts",
+      "status": "added",
+      "sha": "6aaefab6998f54619ea9597f6e5edf8987ed05b1"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-version/useHostVersionState/useHostVersionState.ts",
+      "status": "added",
+      "sha": "304d019ead2e273c31189f7efb3836b60e089ac2"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-version/useHostsNeedingUpdate/index.ts",
+      "status": "added",
+      "sha": "e9d6c1db44ed68fb407042f02f9cf964b274d590"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/host-version/useHostsNeedingUpdate/useHostsNeedingUpdate.ts",
+      "status": "added",
+      "sha": "10bf01b031236f31d2ad06586450e2eab7df7c4e"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/known-hosts/useKnownHosts/useKnownHosts.ts",
+      "status": "modified",
+      "sha": "b7c83e9aba10a7df2bb4283d4390b99e1f1fecda"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/useHostsPresence/index.ts",
+      "status": "modified",
+      "sha": "36d7f9daaaaa7733e0e9035f76de71d24b511acb"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/useHostsPresence/useHostsPresence.ts",
+      "status": "modified",
+      "sha": "30b69071692f3cb73e55e92290b975e4484fdc92"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/useOpenNewWorkspace/index.ts",
+      "status": "added",
+      "sha": "b86c395a974257803bc8ce08e4ce15baf2163f86"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/useOpenNewWorkspace/useOpenNewWorkspace.ts",
+      "status": "added",
+      "sha": "4aae3f19a104bb1ea96d49e45068b49d79c99101"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/useQuickCreateWorkspace/useQuickCreateWorkspace.ts",
+      "status": "modified",
+      "sha": "5105e95f43433a615d457b168b80d5573e3ea6e7"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/useSelectedHostProjectIds/index.ts",
+      "status": "added",
+      "sha": "d785220c21bae6a4845852bfba70fc46a7b82991"
+    },
+    {
+      "path": "apps/desktop/src/renderer/hooks/useSelectedHostProjectIds/useSelectedHostProjectIds.ts",
+      "status": "added",
+      "sha": "a659ea1a4cd85d1d7bb9185fdfd1aa699cc860ef"
+    },
+    {
+      "path": "apps/desktop/src/renderer/lib/host-service-client.ts",
+      "status": "modified",
+      "sha": "9f2f46044c5b5f180048adc46377f14c42b5bbd1"
+    },
+    {
+      "path": "apps/desktop/src/renderer/lib/radix-layers/inputGroupPopover.test.tsx",
+      "status": "added",
+      "sha": "e78e4141d342579b3d72aad6bd3978f3b8a6d509"
+    },
+    {
+      "path": "apps/desktop/src/renderer/lib/sentry.ts",
+      "status": "modified",
+      "sha": "f6121b84c5cf1baeaf87aef4f7ec6a034eabc2ad"
+    },
+    {
+      "path": "apps/desktop/src/renderer/lib/terminal/terminal-ws-transport.test.ts",
+      "status": "modified",
+      "sha": "f015dba6782ff9cbb39dd123540b9ec507c07d7c"
+    },
+    {
+      "path": "apps/desktop/src/renderer/lib/terminal/terminal-ws-transport.ts",
+      "status": "modified",
+      "sha": "ac3d7663a1a8b2d46e5569c0a160a62ebb4f97f9"
+    },
+    {
+      "path": "apps/desktop/src/renderer/lib/utils/isHostServiceConnectionError/index.ts",
+      "status": "added",
+      "sha": "4d1a7561ae02a21db6be6baed87ff3513fdb056a"
+    },
+    {
+      "path": "apps/desktop/src/renderer/lib/utils/isHostServiceConnectionError/isHostServiceConnectionError.test.ts",
+      "status": "added",
+      "sha": "ecb8bef745d99ce4d26095d84182c7059e905c6e"
+    },
+    {
+      "path": "apps/desktop/src/renderer/lib/utils/isHostServiceConnectionError/isHostServiceConnectionError.ts",
+      "status": "added",
+      "sha": "fee28f921c84774431c80f3765d8f15647d7d191"
+    },
+    {
+      "path": "apps/desktop/src/renderer/lib/v1-migration/groups.ts",
+      "status": "added",
+      "sha": "ce162221db55a78d0f916160f58d1b1fbff9713b"
+    },
+    {
+      "path": "apps/desktop/src/renderer/lib/v1-migration/ipc.ts",
+      "status": "modified",
+      "sha": "26d5e356e5f507ef0f1537ca2a866b0e6e7b969e"
+    },
+    {
+      "path": "apps/desktop/src/renderer/lib/v1-migration/runV1Migration.test.ts",
+      "status": "modified",
+      "sha": "31a2d4088882a4b48230424179bf8b2404220822"
+    },
+    {
+      "path": "apps/desktop/src/renderer/lib/v1-migration/runV1Migration.ts",
+      "status": "modified",
+      "sha": "095014f7c8a87fb209942c89f2cddd836ce10910"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/$automationId/components/AutomationBreadcrumbBar/AutomationBreadcrumbBar.tsx",
+      "status": "added",
+      "sha": "0d765ac8d8d85f22b3a52577eb673fb08a98f737"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/$automationId/components/AutomationBreadcrumbBar/index.ts",
+      "status": "added",
+      "sha": "fa553258600dd912f12a077acdfab01aef724688"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/$automationId/components/AutomationDetailHeader/AutomationDetailHeader.tsx",
+      "status": "modified",
+      "sha": "18e9705ea03bbdde85711b90917f72500c8f1889"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/$automationId/components/WrongOrganizationNotice/WrongOrganizationNotice.tsx",
+      "status": "added",
+      "sha": "3651614095abebca7fd32ddd96c365f95c097ab0"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/$automationId/components/WrongOrganizationNotice/index.ts",
+      "status": "added",
+      "sha": "05880885a34aa9923aa6c35034768e9c660d973b"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/$automationId/page.tsx",
+      "status": "modified",
+      "sha": "c379fd6a25275c1f61b4cfc23eb377e3b01be9fc"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/components/AutomationRow/AutomationRow.tsx",
+      "status": "modified",
+      "sha": "92a4e1b5710644082f3e828b57799bb36bc5c026"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/components/AutomationRow/components/AutomationActionsMenuItems/AutomationActionsMenuItems.tsx",
+      "status": "modified",
+      "sha": "48a1308fc6c266288e8a6abd8c2852f530de09c2"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/components/AutomationsEmptyState/AutomationsEmptyState.tsx",
+      "status": "modified",
+      "sha": "912b2e9267b7af6b4af113a0d95167128d5ccc9f"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/components/TemplateCard/TemplateCard.tsx",
+      "status": "modified",
+      "sha": "55bd4976992c45ead2db17489ca175b2013026bc"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/hooks/useCopyAutomationLink/index.ts",
+      "status": "added",
+      "sha": "d79527a5015a46414cccac356dd371dce1540131"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/hooks/useCopyAutomationLink/useCopyAutomationLink.ts",
+      "status": "added",
+      "sha": "7240ad58a5efaccd9138e5ab1c951d690d4fd35d"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/automations/page.tsx",
+      "status": "modified",
+      "sha": "a4fdd5dd42c4e6e302e8411a248c6d60072fa5e8"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/components/AddRepositoryModals/hooks/useFolderFirstImport/useFolderFirstImport.test.ts",
+      "status": "modified",
+      "sha": "4dde39efaa3afb63bc2e857e8c98585b6a3749c6"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/components/DashboardSidebar/components/DashboardSidebarCloudSection/DashboardSidebarCloudSection.tsx",
+      "status": "modified",
+      "sha": "a13a8ca18e2cebb9ae30c7827b2c61f6c5f98a78"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/components/DashboardSidebar/components/DashboardSidebarHeader/DashboardSidebarHeader.tsx",
+      "status": "modified",
+      "sha": "b1998e1fc59401ea018c28c04a3dcd82aeba6ae9"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/components/DashboardSidebar/components/DashboardSidebarProjectSection/hooks/useDashboardSidebarProjectSectionActions/useDashboardSidebarProjectSectionActions.ts",
+      "status": "modified",
+      "sha": "16d172041a5b55bd05e682316a4941b229fb82b5"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/components/DashboardSidebar/components/DashboardSidebarSessionsSection/DashboardSidebarSessionsSection.tsx",
+      "status": "modified",
+      "sha": "3b47f5ea7437f1692e41a9021584000aaf3b5033"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/components/DashboardSidebar/components/DashboardSidebarWorkspaceItem/components/DashboardSidebarExpandedWorkspaceRow/DashboardSidebarExpandedWorkspaceRow.tsx",
+      "status": "modified",
+      "sha": "6258a407a35e90f15935390294ddea00c07000da"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/components/DashboardSidebar/components/V2SetupScriptCard/useV2SetupScriptCard.ts",
+      "status": "modified",
+      "sha": "d15cd0f40eda3752871290458aadcd0b1a2483cd"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/components/FeatureHeader/FeatureHeader.tsx",
+      "status": "added",
+      "sha": "bb1c734c2bcc212fb047bf695b34c844ea53b921"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/components/FeatureHeader/index.ts",
+      "status": "added",
+      "sha": "aca284cf1c70ff4d5eaed9b5f8ee047db22c63bc"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/components/PageViewer/PageViewer.tsx",
+      "status": "modified",
+      "sha": "375eb096d9690821aa638d3ac897cb4e9ebf7920"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/components/PageViewer/hooks/usePageCommentStore/usePageCommentStore.ts",
+      "status": "modified",
+      "sha": "4e3bb5fd35ec39de28a875991c3b232b5bed7c54"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/layout.tsx",
+      "status": "modified",
+      "sha": "87a95f833ed271748ed07c6995326b57483b6c81"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/new-workspace/page.tsx",
+      "status": "modified",
+      "sha": "3d0de261a97b74bd1fac5a7d57d663f6a8ac2ba4"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pages/components/PagesGrid/PagesGrid.tsx",
+      "status": "modified",
+      "sha": "d937943b1526cea81661671c1b79728c3935f676"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pages/components/PagesView/PagesView.tsx",
+      "status": "modified",
+      "sha": "e427dd1cd70a1e543f915a1e8e1be68726a1d6b2"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pages/components/PagesView/hooks/useCreatePageWithAgent/constants.ts",
+      "status": "added",
+      "sha": "a95c307b12a736cf74aebbda2449ab71a6afcd22"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pages/components/PagesView/hooks/useCreatePageWithAgent/index.ts",
+      "status": "added",
+      "sha": "9285b60b97dec7c29d1b28f241c328de2858e1d8"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pages/components/PagesView/hooks/useCreatePageWithAgent/useCreatePageWithAgent.ts",
+      "status": "added",
+      "sha": "893b3bcb82bc021c4a0601b7072c493d65f449c1"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pull-requests/$prNumber/page.tsx",
+      "status": "modified",
+      "sha": "8596eeeeff91e9c9287c78bcd85c4ca081cd7539"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pull-requests/components/PullRequestDetailHeader/PullRequestDetailHeader.tsx",
+      "status": "added",
+      "sha": "ef2f794bcdad0f9f5128d204dbaa6ed5b05991b3"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pull-requests/components/PullRequestDetailHeader/index.ts",
+      "status": "added",
+      "sha": "94f5e52c5d2e6201093dd4480283d3b1fc2f8a12"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pull-requests/components/PullRequestSummaryContent/PullRequestSummaryContent.tsx",
+      "status": "added",
+      "sha": "509fa0444da3da5cec687dd03f4266240495b7ab"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pull-requests/components/PullRequestSummaryContent/index.ts",
+      "status": "added",
+      "sha": "9cf3ac69d16e0c5b5874af476f6ff4bfa57610c3"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pull-requests/hooks/usePullRequestDetail/index.ts",
+      "status": "added",
+      "sha": "ead50b4fa923dbb5bd2a732ece30c13c37fa4b62"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pull-requests/hooks/usePullRequestDetail/usePullRequestDetail.ts",
+      "status": "added",
+      "sha": "0e4330bc7f640347a70da6877cc5fb170c07a01b"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pull-requests/utils/resolvePullRequestDetail/index.ts",
+      "status": "added",
+      "sha": "dd45d3d38bbc07a90172207c6092f662896d7c7f"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pull-requests/utils/resolvePullRequestDetail/resolvePullRequestDetail.test.ts",
+      "status": "added",
+      "sha": "4d2c42a41c9d140893ff3b89e47f60ce04e61305"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/pull-requests/utils/resolvePullRequestDetail/resolvePullRequestDetail.ts",
+      "status": "added",
+      "sha": "86d44c764b4c4a031f43672cdb299d934e144f21"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/tasks/$taskId/components/PropertiesSidebar/components/OpenInWorkspaceV2/OpenInWorkspaceV2.tsx",
+      "status": "modified",
+      "sha": "dce61373fa464aa8499cfcb777bab2cf3bb479eb"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/tasks/components/TasksView/components/GitHubIssuesContent/GitHubIssuesContent.tsx",
+      "status": "modified",
+      "sha": "546d2b793ddc267a2c080d4cdd6641a2952a4b66"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/tasks/components/TasksView/components/TasksTopBar/components/RunInWorkspacePopoverV2/RunInWorkspacePopoverV2.tsx",
+      "status": "modified",
+      "sha": "81c1aa4b20da1d4e5d02a6a13d88238882a53e5c"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/tasks/components/TasksView/components/TasksTopBar/components/RunIssuesInWorkspacePopover/RunIssuesInWorkspacePopover.tsx",
+      "status": "modified",
+      "sha": "4bf67854f4630ff674442ca1a613fc40b15e3629"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/tasks/issue/$issueNumber/page.tsx",
+      "status": "modified",
+      "sha": "ffbe1f5edc3e630c48023449282848cea6e517cc"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/utils/toThreads/toThreads.ts",
+      "status": "modified",
+      "sha": "48cc49bf62031ac83452e353796eac32603eb61f"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/components/ChangesControl/ChangesControl.tsx",
+      "status": "modified",
+      "sha": "f61d1a031fe2113e60ccf574e80af2406efec68d"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/components/ChangesControl/components/PRStatusGroup/PRStatusGroup.tsx",
+      "status": "modified",
+      "sha": "89ee79b9134e09e355806e1aeda0292c9783dc1a"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/components/ChangesControl/components/ShipControl/ShipControl.tsx",
+      "status": "modified",
+      "sha": "6cdeb1a8550939fe858937105260e36aff5162b1"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/components/WorkspaceSidebar/WorkspaceSidebar.tsx",
+      "status": "modified",
+      "sha": "aa4edb7076d385808ab19ee851d3607741f67a02"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/components/WorkspaceSidebar/hooks/useReviewTab/components/PRHeader/PRHeader.tsx",
+      "status": "modified",
+      "sha": "0005e7a18e424d9814d42921c2068d047361cad6"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/components/WorkspaceSidebar/hooks/useReviewTab/components/ReviewTabContent/ReviewTabContent.tsx",
+      "status": "modified",
+      "sha": "d2de093110b81ff85756e0156ea0dd8da5101c5d"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/components/WorkspaceSidebar/hooks/useReviewTab/useReviewTab.tsx",
+      "status": "modified",
+      "sha": "e516d63ef10db2b518bcae1f0dd1a0e1373107ea"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/useConsumeAutomationRunLink/useConsumeAutomationRunLink.ts",
+      "status": "modified",
+      "sha": "f3cc8b509654d60c5b004a050175eaa694332f4f"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/BrowserPane/browserRuntimeRegistry.test.ts",
+      "status": "modified",
+      "sha": "71154cc31b294af403a33de6e9ce1d174761bc3a"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/BrowserPane/browserRuntimeRegistry.ts",
+      "status": "modified",
+      "sha": "a44ad3bed914d57b5b30da9921c6f63582e096ce"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/BrowserPane/hooks/usePersistentWebview/usePersistentWebview.ts",
+      "status": "modified",
+      "sha": "acc479a1808a3ff5f459f121ebeeea4347ccd45f"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/BrowserPane/sanitizeUrl.test.ts",
+      "status": "added",
+      "sha": "2c4b58919c02ac3287623ded2edd7ab637d6fc6f"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/BrowserPane/sanitizeUrl.ts",
+      "status": "modified",
+      "sha": "65f88b08ae31f2e3d7fe6863759463d9b455889e"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/DiffPane/DiffPane.tsx",
+      "status": "modified",
+      "sha": "5c7c4fa3b64be9fe9a57afae60e4fe3bc5279bf5"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/DiffPane/components/DiffPaneHeaderExtras/DiffPaneHeaderExtras.tsx",
+      "status": "modified",
+      "sha": "2b0442c1eb6510127bef9002cf434d1d67b70d0d"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/DiffPane/components/DiffPaneHeaderExtras/components/DiffPanePRLink/DiffPanePRLink.tsx",
+      "status": "modified",
+      "sha": "fbe6aa148fe83b32485b85d81ecf680a24193072"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/DiffPane/utils/diffLoadingGuards/diffLoadingGuards.test.ts",
+      "status": "modified",
+      "sha": "d79963491adeb3321a03a470d61418885d480d93"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/DiffPane/utils/diffLoadingGuards/diffLoadingGuards.ts",
+      "status": "modified",
+      "sha": "84bed935f9581bfc180fa8bde638de3452dcd44c"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/DiffPane/utils/diffLoadingGuards/index.ts",
+      "status": "modified",
+      "sha": "cdffcebfee51619aa2364a82dc1473647f8ae3db"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/PullRequestPane/PullRequestPane.tsx",
+      "status": "added",
+      "sha": "4821cc5eeebe042e21d11b559eb488856bd2aa5c"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/PullRequestPane/components/PullRequestPaneHeaderExtras/PullRequestPaneHeaderExtras.tsx",
+      "status": "added",
+      "sha": "39633066db2ea55c3c0fa85c2125ef1f3cf0dd76"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/PullRequestPane/components/PullRequestPaneHeaderExtras/index.ts",
+      "status": "added",
+      "sha": "10141c840e545a9b924505a3f89c0b4a06e67fde"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/PullRequestPane/index.ts",
+      "status": "added",
+      "sha": "b5337c17e68d60a8aa33a14e6c28205ee441186f"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/TerminalPane/components/TerminalAgentAutoResume/TerminalAgentAutoResume.tsx",
+      "status": "modified",
+      "sha": "e3ae71ca41049d05f42ec5794b764578dab6831f"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/components/TerminalPane/components/TerminalRichInput/TerminalRichInput.tsx",
+      "status": "modified",
+      "sha": "c0c69e8bf679d75b0aef7231d2ec0013c8e6d19c"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePaneRegistry/usePaneRegistry.tsx",
+      "status": "modified",
+      "sha": "1da3ea58a0b5b3d81be295a3702cda8e74184a75"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePullRequestPaneIntentOpener/index.ts",
+      "status": "added",
+      "sha": "654c4180c2902b50bd40b011563f0e09a664fa0a"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/usePullRequestPaneIntentOpener/usePullRequestPaneIntentOpener.ts",
+      "status": "added",
+      "sha": "0b973446f482da2f9060a672eaa124bd44e32c4e"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/hooks/useWorkspacePaneOpeners/useWorkspacePaneOpeners.ts",
+      "status": "modified",
+      "sha": "a429acb3319fd166a210a690ab1479987f20818b"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/layout.tsx",
+      "status": "modified",
+      "sha": "4068a094b9e7ee8cc12a5f672fd6c9ace5714310"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/page.tsx",
+      "status": "modified",
+      "sha": "124ce20b6ed6ce80ab6dfbb1a0bf51c1232d43ca"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/state/fileDocumentStore/fileDocumentStore.test.ts",
+      "status": "added",
+      "sha": "56613e0e943c334dcac2ab15c0e295c230ae563a"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/types.ts",
+      "status": "modified",
+      "sha": "b64e10b02adca6c2e75157f736e921de922a66f5"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/utils/openPullRequestPaneInStore/index.ts",
+      "status": "added",
+      "sha": "eaf998edd66986caaa81ea123d47af3b7de3d29e"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/utils/openPullRequestPaneInStore/openPullRequestPaneInStore.test.ts",
+      "status": "added",
+      "sha": "63f7940284e4ae3db7ec84005bca72a31a808831"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/$workspaceId/utils/openPullRequestPaneInStore/openPullRequestPaneInStore.ts",
+      "status": "added",
+      "sha": "e2302b0f581074d2139751a5d2181fa9ef926991"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/components/WorkspaceHostIncompatibleState/WorkspaceHostIncompatibleState.tsx",
+      "status": "modified",
+      "sha": "900a4d5419fde5b86827271dbbc2a18166f8b5e2"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/components/WorkspaceHostUnreachableState/WorkspaceHostUnreachableState.tsx",
+      "status": "modified",
+      "sha": "636285aae6aed5c556f79a03832693c50ea4a1f4"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/hooks/useHostReachability/useHostReachability.test.ts",
+      "status": "added",
+      "sha": "a6f13d75b87d51cac7d2178930b0204621054094"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/hooks/useHostReachability/useHostReachability.ts",
+      "status": "modified",
+      "sha": "61d2e5699d11b0d9f331bd4d22888f337fd9508a"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/hooks/useRemoteHostStatus/useRemoteHostStatus.ts",
+      "status": "modified",
+      "sha": "b7c3b0cbb0cac022a7abc99cfdda0042950f501a"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/providers/WorkspaceProvider/components/WorkspaceHostGate/WorkspaceHostGate.tsx",
+      "status": "modified",
+      "sha": "e77a37781bdbe873c398ff8696e36dd2a65ea666"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/providers/WorkspaceProvider/components/WorkspaceHostGate/components/HostConnectionStrip/HostConnectionStrip.tsx",
+      "status": "added",
+      "sha": "2b32f4cfb0965adc2087eb56ae39d930bc5c23f0"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/providers/WorkspaceProvider/components/WorkspaceHostGate/components/HostConnectionStrip/index.ts",
+      "status": "added",
+      "sha": "b6e878b1327d45ff2c18337886e721d8e65875fd"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspace/providers/WorkspaceProvider/utils/localHostServiceDetail/localHostServiceDetail.ts",
+      "status": "modified",
+      "sha": "65df73521ab63c54d15d6e077a189c315ac7af94"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspaces/components/V2WorkspacesHeader/V2WorkspacesHeader.tsx",
+      "status": "modified",
+      "sha": "e9c877c54d2aac27451c0bc6677beaf15f459d0e"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspaces/components/V2WorkspacesList/components/V2WorkspaceRow/V2WorkspaceRow.tsx",
+      "status": "modified",
+      "sha": "b089aa6b6b9ff73e0c6ed987a5749c0c28bd4c70"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/_dashboard/v2-workspaces/hooks/useAccessibleV2Workspaces/useAccessibleV2Workspaces.ts",
+      "status": "modified",
+      "sha": "5b6c272b58ea49f779c3aa05a79a34c8507643dd"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/PromptGroup/components/CompareBaseBranchPicker/CompareBaseBranchPicker.tsx",
+      "status": "modified",
+      "sha": "31d3a04c9484f47ed6da144e273cb71102d43f7b"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/PromptGroup/hooks/useSubmitWorkspace/useSubmitWorkspace.ts",
+      "status": "modified",
+      "sha": "6c6fec800d4df5ce8fc1228ef62cf2df30b44dc8"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/components/DevicePicker/DevicePicker.tsx",
+      "status": "modified",
+      "sha": "f87bd4370514b2eec1c7f1d57894e5a3ebae5a35"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/components/DevicePicker/hooks/useWorkspaceHostOptions/useWorkspaceHostOptions.ts",
+      "status": "modified",
+      "sha": "784d90ff0dec128aee8f6fd6f3527cf30f211a53"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/NewWorkspaceScreen/NewWorkspaceScreen.tsx",
+      "status": "modified",
+      "sha": "31ffddaf61a874f319e69ddc34ab9ab810ef854d"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/HostUpdateSteps/HostUpdateSteps.tsx",
+      "status": "added",
+      "sha": "6bb322213cc51649787514d1538deeb9babffcc1"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/HostUpdateSteps/index.ts",
+      "status": "added",
+      "sha": "45c1eadf46c05ebceef5bdfb43f1a1e4d004d900"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/HostVersionBadge/HostVersionBadge.tsx",
+      "status": "added",
+      "sha": "cad560a9e3cf59943364748bc0e21355a728a7b4"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/HostVersionBadge/index.ts",
+      "status": "added",
+      "sha": "d446f1a2f2740e7753f1e456b5e3f583402ab2f5"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/V1AutoMigration/V1AutoMigration.tsx",
+      "status": "modified",
+      "sha": "c145a8c3666f1473fa374f68636de2fac8bc4c04"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/layout.tsx",
+      "status": "modified",
+      "sha": "32be9fd4040b1db77ee1256a9c11ee5227264af8"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/onboarding/project/page.tsx",
+      "status": "modified",
+      "sha": "d2e08d521b76bff689ec9e147d100d4fbd862251"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/settings/billing/components/BillingOverview/BillingOverview.tsx",
+      "status": "modified",
+      "sha": "959acc6ba93a5684430e2bc759cb095a8f8c1513"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/settings/billing/plans/page.tsx",
+      "status": "modified",
+      "sha": "b6ae7c11332d02f7cbaa0c0280f84ec8544ef432"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/settings/components/SettingsSidebar/GeneralSettings.tsx",
+      "status": "modified",
+      "sha": "20e36467c01bb55fe422dcbf0e528ea787424d2a"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/settings/hosts/$hostId/components/HostSettings/HostSettings.tsx",
+      "status": "modified",
+      "sha": "8dea5aacaa4e789cf57160929fd46db6a6ba5653"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/settings/hosts/$hostId/components/HostSettings/components/HostServiceSection/HostServiceSection.tsx",
+      "status": "added",
+      "sha": "f40cc3f08be6a29c86cdd5444eb783e30931c5ad"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/settings/hosts/$hostId/components/HostSettings/components/HostServiceSection/index.ts",
+      "status": "added",
+      "sha": "42e58e13495a798b5e4b8c49c11f4deb5200daf2"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/settings/hosts/components/HostsSettingsSidebar/HostsSettingsSidebar.tsx",
+      "status": "modified",
+      "sha": "d37e016fecf7a633bae506d56afaddbc7ff31794"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/settings/usage/hooks/useRestartAgentSessions/useRestartAgentSessions.ts",
+      "status": "modified",
+      "sha": "54407cbb6cae1f9f8d44a69bdcf0923dbd64ebbc"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/settings/utils/settings-search/settings-search.ts",
+      "status": "modified",
+      "sha": "02110e6e4e0d7301acdcddb706ce711815afe102"
+    },
+    {
+      "path": "apps/desktop/src/renderer/screens/main/components/WorkspaceSidebar/ProjectSection/ProjectSection.tsx",
+      "status": "modified",
+      "sha": "c8bee3d1e1ffea37a9d2fc8036b4ac410ac48989"
+    },
+    {
+      "path": "apps/desktop/src/renderer/screens/main/components/WorkspaceSidebar/WorkspaceSidebarHeader/NewWorkspaceButton.tsx",
+      "status": "modified",
+      "sha": "ca1b063bac2d09e9f19fc2eeeb6b4f2bf97f7e77"
+    },
+    {
+      "path": "apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/TabView/FileViewerPane/hooks/useFileContent/useFileContent.test.ts",
+      "status": "modified",
+      "sha": "d6fd4203bd93cec6c0364607a5eb5a24f29f506c"
+    },
+    {
+      "path": "apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/Terminal/Terminal.tsx",
+      "status": "modified",
+      "sha": "7d57b48b8ef681faf5c3dd7c0628d6f823f6298f"
+    },
+    {
+      "path": "apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/Terminal/hooks/useTerminalLifecycle.attach.test.ts",
+      "status": "added",
+      "sha": "7050b39118cde72465d1f01fb94766436b725ab0"
+    },
+    {
+      "path": "apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/Terminal/hooks/useTerminalLifecycle.ts",
+      "status": "modified",
+      "sha": "ceb73f6bbe02093b77e19d3fced6a1e96cb276b7"
+    },
+    {
+      "path": "apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/Terminal/shell-exited-failure.test.ts",
+      "status": "added",
+      "sha": "0b5a282425d3c4ec084cacc454395430b8e06f1b"
+    },
+    {
+      "path": "apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentView/TabsContent/Terminal/shell-exited-failure.ts",
+      "status": "added",
+      "sha": "567ffcb041cd6b32a5efe1e780d7f1f34eee8fba"
+    },
+    {
+      "path": "apps/desktop/src/renderer/stores/new-workspace-modal.ts",
+      "status": "modified",
+      "sha": "f5214c67ddef4e8f1a42689b1707af2566710f3e"
+    },
+    {
+      "path": "apps/desktop/src/renderer/stores/pull-request-pane-intent.ts",
+      "status": "added",
+      "sha": "b87b170f328c08eaa8f6c29751c121875d1c4735"
+    },
+    {
+      "path": "apps/desktop/src/trpc-electron-frame-patch.test.ts",
+      "status": "added",
+      "sha": "c5ea3e70458039288f94fd8333046f1b572611df"
+    },
+    {
+      "path": "apps/desktop/src/xterm-render-debouncer-patch.test.ts",
+      "status": "added",
+      "sha": "747d71e36d4fc64966864eb63d39f52624971400"
+    },
+    {
+      "path": "apps/docs/content/docs/mcp-server.mdx",
+      "status": "modified",
+      "sha": "ffebd1cf39ce6b8e5c6594e8f731a5bfc159cce7"
+    },
+    {
+      "path": "apps/docs/content/docs/meta.json",
+      "status": "modified",
+      "sha": "92e64f0a702dc5c421a2e87e7b0389c0b0686ad8"
+    },
+    {
+      "path": "apps/docs/content/docs/overview.mdx",
+      "status": "modified",
+      "sha": "4efe221a853bcaeba982d0d3f855047b02507987"
+    },
+    {
+      "path": "apps/docs/content/docs/pages.mdx",
+      "status": "added",
+      "sha": "da183b0bdb00b30a58f4084b9f09b77efa804937"
+    },
+    {
+      "path": "apps/docs/content/docs/skills.mdx",
+      "status": "modified",
+      "sha": "a1816da2e6a306ebfb4cf8b75ac0b898e55f3bb7"
+    },
+    {
+      "path": "apps/docs/next.config.mjs",
+      "status": "modified",
+      "sha": "545efc5bb48ff7e12ea7e97cd763729658c57932"
+    },
+    {
+      "path": "apps/docs/sentry.edge.config.ts",
+      "status": "modified",
+      "sha": "28e92c435a9462810841802e45f9e2c1db94d8f9"
+    },
+    {
+      "path": "apps/docs/sentry.server.config.ts",
+      "status": "modified",
+      "sha": "28e92c435a9462810841802e45f9e2c1db94d8f9"
+    },
+    {
+      "path": "apps/docs/src/app/robots.ts",
+      "status": "modified",
+      "sha": "a4218f04f3854f2b300b622cf42cf3f7cd5f7d19"
+    },
+    {
+      "path": "apps/docs/src/instrumentation-client.ts",
+      "status": "modified",
+      "sha": "121bef39be2b2053394cd4e7443b3a03ea7c2267"
+    },
+    {
+      "path": "apps/marketing/content/legal/subprocessors.mdx",
+      "status": "modified",
+      "sha": "0dffe2ba0ae260dc98cd12c682b464852c4462c2"
+    },
+    {
+      "path": "apps/marketing/next.config.ts",
+      "status": "modified",
+      "sha": "910086c5b39f005bd641d76971abe87216051949"
+    },
+    {
+      "path": "apps/marketing/public/fonts/Inter-Bold.ttf",
+      "status": "added",
+      "sha": "7cb7f4d145f77249f6d6165fb048697fce4f6bba"
+    },
+    {
+      "path": "apps/marketing/sentry.edge.config.ts",
+      "status": "modified",
+      "sha": "d59a188ede18d61b360bae5b953aa18d0a24e437"
+    },
+    {
+      "path": "apps/marketing/sentry.server.config.ts",
+      "status": "modified",
+      "sha": "d59a188ede18d61b360bae5b953aa18d0a24e437"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/agent-orchestration/page.tsx",
+      "status": "modified",
+      "sha": "5c1970547a81657afc25a5f7c680c6141a952e21"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/blog/[slug]/opengraph-image.tsx",
+      "status": "modified",
+      "sha": "2765b0b6d3c0c4d7f7027352f606465575ada750"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/blog/page.tsx",
+      "status": "modified",
+      "sha": "6c5a33715dec6b6ac6f6e22653306943f262e62b"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/changelog/[slug]/opengraph-image.tsx",
+      "status": "modified",
+      "sha": "6bee6eb528f582a4b0f5a67f0e61ed353e128a61"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/changelog/page.tsx",
+      "status": "modified",
+      "sha": "d5f97f2ba2ff79061e17afe18fcc0653850c12be"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/cloud/page.tsx",
+      "status": "added",
+      "sha": "5069973b5ef87cbc50169dd12c13422ebab1628a"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/compare/[slug]/page.tsx",
+      "status": "modified",
+      "sha": "9a7eb2440ffb36a04453d9be6176861053d9989f"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/compare/page.tsx",
+      "status": "modified",
+      "sha": "80ec1f66dcfb7f45344214ffa4aff1c63c2d30d4"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/components/AchievementMedal/AchievementMedal.tsx",
+      "status": "modified",
+      "sha": "b5d31ea86d2488282d5c075b6be3074131f27182"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/components/ContactForm/ContactForm.tsx",
+      "status": "added",
+      "sha": "0a0d0918c90f111d57c66158b78c88bc138e5776"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/components/ContactForm/index.ts",
+      "status": "added",
+      "sha": "2f926e6596fcb85eaa973c0ac6a67cdc27cfa111"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/components/ContributionGraph/ContributionGraph.tsx",
+      "status": "modified",
+      "sha": "7405d0ae90c6c7c43115b687e32ca1afcd1cc2fa"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/components/HeroSection/HeroSection.tsx",
+      "status": "modified",
+      "sha": "0e167d330f1c37ad2d918a8fd5c7f1e10c9defd2"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/components/TierObjectives/TierObjectives.tsx",
+      "status": "modified",
+      "sha": "6dab07c740b137896530b526cbba95ff0b4d83e9"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/contact/page.tsx",
+      "status": "modified",
+      "sha": "867d18c8e8c754a86f6582f1013bd474f548f9de"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/download/components/DownloadInterstitial/DownloadInterstitial.tsx",
+      "status": "modified",
+      "sha": "a97cd09d2cb1ce4088ce811b1da46c1a3f6fa1eb"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/download/components/ReleaseList/ReleaseList.tsx",
+      "status": "modified",
+      "sha": "10d312ed0889a7d80520372fc9f177bc8cdbbbc9"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/download/utils/formatReleaseDate/formatReleaseDate.ts",
+      "status": "modified",
+      "sha": "a6e8a96b83ad5566fd56f26e423378da64d6f404"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/factory-2026/page.tsx",
+      "status": "modified",
+      "sha": "69f4ac2c300a36d4b968df9e8ac4579bfa55b3be"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/join-us/page.tsx",
+      "status": "modified",
+      "sha": "4ce8918509157dd50e643c8cf7df33757a79e803"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/layout.tsx",
+      "status": "modified",
+      "sha": "691b9278dae35ebba78e2744b297cef5e1320ab9"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/leaderboard/page.tsx",
+      "status": "modified",
+      "sha": "fc6b5b369844cce13a25cd98a5f7a13bd0fd3bba"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/metadata.test.ts",
+      "status": "added",
+      "sha": "7751e92a886a2698856707d6fa2b0b6881f12eca"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/metadata.ts",
+      "status": "modified",
+      "sha": "e73c44948bae09b23fbeb4fd0a4fc6c354bd4cfd"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/parallel-coding-agents/page.tsx",
+      "status": "modified",
+      "sha": "9e9757c6cd7be733240bc09e7fa1e2929c3cedf0"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/roadmap/page.tsx",
+      "status": "modified",
+      "sha": "9e4226cc70a6182e16584685806a49693a878631"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/starchart/page.tsx",
+      "status": "modified",
+      "sha": "996ee3a12bade71bc0940e3841c2bcc5be297e60"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/stats/page.tsx",
+      "status": "modified",
+      "sha": "56f67ae21d745bead358a5268f17af68a6f63c31"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/team/page.tsx",
+      "status": "modified",
+      "sha": "11c9a2bd624f8db32c9fd32d05bdc15b08fb05ab"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/the-production-run/components/RunSimulator/RunSimulator.tsx",
+      "status": "modified",
+      "sha": "e374dd122567b9554e5f4f37a1b2a1e8937ead4e"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/the-production-run/constants.ts",
+      "status": "modified",
+      "sha": "0160f9e668f79c31477bbdd14a398f2b597c6309"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/the-production-run/page.tsx",
+      "status": "modified",
+      "sha": "2ccd1ccfe78fde759efaae694fbc225a9be31a59"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/user/[handle]/components/ProfileUnavailable/ProfileUnavailable.tsx",
+      "status": "added",
+      "sha": "f28e18e0d6a2263bd2d3f796b8c0b385b57ed941"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/user/[handle]/components/ProfileUnavailable/index.ts",
+      "status": "added",
+      "sha": "8adc88d96194416a8854a2901fa77b3f2501a8fd"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/user/[handle]/opengraph-image.tsx",
+      "status": "modified",
+      "sha": "e984f02fb1bc4338374793020d111fa26266b00e"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/user/[handle]/page.tsx",
+      "status": "modified",
+      "sha": "d21cef022cea84a17ce3e0b65ce93fb1d6da808f"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/user/[handle]/utils/loadProfile/index.ts",
+      "status": "added",
+      "sha": "56f54731a335aef6c9f645abb4ad28cd46aa5593"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/user/[handle]/utils/loadProfile/loadProfile.ts",
+      "status": "added",
+      "sha": "b2be5a98dd1231e01fcc0435f6d0d9f1cb4d111f"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/utils/fetchLeaderboard/fetchLeaderboard.ts",
+      "status": "modified",
+      "sha": "752a05d29456f4c4b60f726d17805de9305dbdff"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/utils/fetchLeaderboard/index.ts",
+      "status": "modified",
+      "sha": "7d1dd209cf119d9c3570564caf54c377fc6196ca"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/utils/getInterBold/getInterBold.ts",
+      "status": "added",
+      "sha": "c51dd6649e9d80e44cbec403d0a3e925b8cc6cdb"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/utils/getInterBold/index.ts",
+      "status": "added",
+      "sha": "09273449cbb29d15d6ab179b6d5730f8e4b94607"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/utils/leaderboardClient/leaderboardClient.ts",
+      "status": "modified",
+      "sha": "41fc4dd6e6ed49f9987fb8d5dee44a69daa06ad2"
+    },
+    {
+      "path": "apps/marketing/src/app/providers.test.tsx",
+      "status": "added",
+      "sha": "84e8688114bec2837d5af9b93c2644a1e7b75804"
+    },
+    {
+      "path": "apps/marketing/src/app/providers.tsx",
+      "status": "modified",
+      "sha": "39535a150e1ce45671ebdb40ef48531712d1b511"
+    },
+    {
+      "path": "apps/marketing/src/app/robots.txt/route.ts",
+      "status": "modified",
+      "sha": "cd6bdbef8aafd602e5cbc1479f36a51793a30181"
+    },
+    {
+      "path": "apps/marketing/src/app/sitemap.test.ts",
+      "status": "added",
+      "sha": "739beabfbade22016c9a848961457698165ef94b"
+    },
+    {
+      "path": "apps/marketing/src/app/sitemap.ts",
+      "status": "modified",
+      "sha": "1400c98ca32b24a95aa730f5e906b5e08140b4d0"
+    },
+    {
+      "path": "apps/marketing/src/env.ts",
+      "status": "modified",
+      "sha": "229bee44a7297a86e2d22c38c8098708619218f7"
+    },
+    {
+      "path": "apps/marketing/src/instrumentation-client.ts",
+      "status": "modified",
+      "sha": "2765989d6746c1ab5a1533a7b5347618b9e8fa34"
+    },
+    {
+      "path": "apps/mobile/app.config.ts",
+      "status": "modified",
+      "sha": "9849d83eaacc3317f6484f45b4fd2dd52ce081e0"
+    },
+    {
+      "path": "apps/mobile/hooks/useDeleteAccount/useDeleteAccount.ts",
+      "status": "modified",
+      "sha": "2e9da8e37443cac9e3f8a6a78ac3a189915c82c6"
+    },
+    {
+      "path": "apps/mobile/hooks/useDeleteWorkspace/useDeleteWorkspace.ts",
+      "status": "modified",
+      "sha": "81b40788f527dd3197977dd6635498b661624de5"
+    },
+    {
+      "path": "apps/mobile/hooks/useSignOut/useSignOut.ts",
+      "status": "modified",
+      "sha": "325b60414c88978773eb0ab7ffa945f6c959c196"
+    },
+    {
+      "path": "apps/mobile/hooks/useWorkspaceHost/useWorkspaceHost.ts",
+      "status": "modified",
+      "sha": "6c77ef91aea18085484f53d47e9af11489310096"
+    },
+    {
+      "path": "apps/mobile/lib/auth/client.ts",
+      "status": "modified",
+      "sha": "17939a8460f768ae69034b8766f8f539b801dfe3"
+    },
+    {
+      "path": "apps/mobile/lib/errors/errors.ts",
+      "status": "added",
+      "sha": "f867c6fa0639a019aed75798b451f5eecf2c39d1"
+    },
+    {
+      "path": "apps/mobile/lib/errors/index.ts",
+      "status": "added",
+      "sha": "2ae84c3571694a9cec76886d036aa37129053f2d"
+    },
+    {
+      "path": "apps/mobile/lib/errors/transport-fetch.ts",
+      "status": "added",
+      "sha": "1c7bb2698a198853bb95ec26c72a5dd6f5994680"
+    },
+    {
+      "path": "apps/mobile/lib/errors/transport-retry.ts",
+      "status": "added",
+      "sha": "163996513d47cdf6e7e42a21ac3e05f51ba601e7"
+    },
+    {
+      "path": "apps/mobile/lib/host-service/client.ts",
+      "status": "modified",
+      "sha": "9493865e5102b6aa6394b9c33393c7adf0e299d2"
+    },
+    {
+      "path": "apps/mobile/lib/sentry/sentry.ts",
+      "status": "modified",
+      "sha": "a342e5b67b044c3863d04c534ac456a58406b588"
+    },
+    {
+      "path": "apps/mobile/lib/terminal/warmTerminalCache.ts",
+      "status": "added",
+      "sha": "1c1ba07bad7b2719dfa79d5fb953fdc3921ca036"
+    },
+    {
+      "path": "apps/mobile/lib/trpc/client.ts",
+      "status": "modified",
+      "sha": "0e4bf005614721f5675cd6467bbd62ac5fd88245"
+    },
+    {
+      "path": "apps/mobile/modules/live-activity/expo-module.config.json",
+      "status": "added",
+      "sha": "d76a075f733f5378449489fa1611f3277eed7a3c"
+    },
+    {
+      "path": "apps/mobile/modules/live-activity/ios/AgentActivityAttributes.swift",
+      "status": "added",
+      "sha": "76c4e67839f7ca81c13fcbb87d36a21a72f21023"
+    },
+    {
+      "path": "apps/mobile/modules/live-activity/ios/LiveActivity.podspec",
+      "status": "added",
+      "sha": "2bedd2df6d40578b96d908302225a0bf4d374045"
+    },
+    {
+      "path": "apps/mobile/modules/live-activity/ios/LiveActivityModule.swift",
+      "status": "added",
+      "sha": "f1ade613dcff814654e959f2f3126f9dd4dba9a1"
+    },
+    {
+      "path": "apps/mobile/modules/live-activity/package.json",
+      "status": "added",
+      "sha": "2b1bfe147be4ec22d16b07dcf0982b8f76c21d8d"
+    },
+    {
+      "path": "apps/mobile/modules/live-activity/src/index.ts",
+      "status": "added",
+      "sha": "f7a33e35417d88ff7c542accf4a6a849dfc1dbaa"
+    },
+    {
+      "path": "apps/mobile/package.json",
+      "status": "modified",
+      "sha": "ca22bb0a17e8abf97d2d187b9367037ab71737cf"
+    },
+    {
+      "path": "apps/mobile/screens/(auth)/sign-in/SignInScreen.tsx",
+      "status": "modified",
+      "sha": "1521a9fd23ccd0e43c13c553dcdc8f2f139cd838"
+    },
+    {
+      "path": "apps/mobile/screens/(auth)/sign-in/components/DevSignInOptions/DevSignInOptions.tsx",
+      "status": "modified",
+      "sha": "1de48c7218b6719e78c72b63fcbb219dbb28513c"
+    },
+    {
+      "path": "apps/mobile/screens/(auth)/sign-in/components/EmailSignInLink/EmailSignInLink.tsx",
+      "status": "modified",
+      "sha": "2094b6043815437f7c35e984aef82e623502d788"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/(home)/home/HomeScreen.tsx",
+      "status": "modified",
+      "sha": "d4e420caf1a4338159a374c82d313299969d90a1"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/(home)/home/components/NewChatWidget/hooks/useCreateCloudWorkspace/useCreateCloudWorkspace.ts",
+      "status": "modified",
+      "sha": "99be5022c520916f6452093ad69921ccfd631e31"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/(home)/home/components/NewChatWidget/hooks/useStartWorkspaceTerminal/useStartWorkspaceTerminal.ts",
+      "status": "modified",
+      "sha": "a430e8bc37addea6a657fe6f7db84ade630c8e78"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/(home)/home/hooks/useAgentLiveActivity/index.ts",
+      "status": "added",
+      "sha": "430eed930b0785ac2509018948be9e699181fed7"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/(home)/home/hooks/useAgentLiveActivity/useAgentLiveActivity.ts",
+      "status": "added",
+      "sha": "1fd1a325b95e638bb4414e6b3b91a848cd0a820a"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/hooks/useCreateTerminalWorkspace/useCreateTerminalWorkspace.ts",
+      "status": "modified",
+      "sha": "7e6cb4bf9f863c861dfd70d4d788c3421f27b28a"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/stores/lastSessionTabStore/index.ts",
+      "status": "added",
+      "sha": "9e871e5ceab1fcd3737fba8762eec72e1d2cd259"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/stores/lastSessionTabStore/lastSessionTabStore.ts",
+      "status": "added",
+      "sha": "14eccaf4eb3074887c4f0e81b2e9fcf2c2c31fed"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/stores/pendingWorkspaceCreatesStore/index.ts",
+      "status": "modified",
+      "sha": "ba34d29aaa899edc1990711bb87e8680b9c921a3"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/stores/pendingWorkspaceCreatesStore/pendingWorkspaceCreatesStore.ts",
+      "status": "modified",
+      "sha": "249d80be97db9f080beb9ea9d36601e8b7a8dfaf"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/workspace/[id]/WorkspaceScreen/WorkspaceScreen.tsx",
+      "status": "modified",
+      "sha": "3bc1f3aa9952b3fbd312a4bf3db7c3aeed36888e"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/workspace/[id]/WorkspaceScreen/components/WorkspaceCreateFailedState/WorkspaceCreateFailedState.tsx",
+      "status": "modified",
+      "sha": "7a1c4a14a2b026e916e7a15d79e73745f6e60401"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/workspace/[id]/components/TerminalComposer/TerminalComposer.tsx",
+      "status": "modified",
+      "sha": "05041160c5d4b7efe7a392e6f7f19bac54809588"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/workspace/[id]/components/TerminalComposer/hooks/useWriteTerminalAttachments/useWriteTerminalAttachments.ts",
+      "status": "modified",
+      "sha": "84aee7ad46fde73ba56ab30a3c4a219f4b91512b"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/workspace/[id]/components/TerminalWebView/TerminalWebView.tsx",
+      "status": "modified",
+      "sha": "e81aa628068e5b9249a8ae7e8774d50f7fd99b23"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/workspace/[id]/components/TerminalWebView/terminalHtml.generated.ts",
+      "status": "modified",
+      "sha": "204e38059a2dbb0bccf31a2a7dfd4a690c9c8bcb"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/workspace/[id]/files-changed/FilesChangedScreen.tsx",
+      "status": "modified",
+      "sha": "5f6aa7b646a45914c61350d09d051e892896364c"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/workspace/[id]/finish-review/FinishReviewSheet.tsx",
+      "status": "modified",
+      "sha": "452b3c0d2182adb1e32f630a3c50049d06761e0e"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/workspace/[id]/new-session/NewSessionSheet.tsx",
+      "status": "modified",
+      "sha": "0353ae67d83df6af70e56ff58b7f02e176d294cd"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/workspace/[id]/pull-request/[pullRequestId]/hooks/useAskAgent/useAskAgent.ts",
+      "status": "modified",
+      "sha": "78bf70d35136de08889c83eebfb5556eb8553594"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/workspace/[id]/pull-request/[pullRequestId]/hooks/useMergePullRequest/useMergePullRequest.ts",
+      "status": "modified",
+      "sha": "917db53257878e95fb9569a8979bd3e81736348a"
+    },
+    {
+      "path": "apps/mobile/screens/(authenticated)/workspace/[id]/pull-request/[pullRequestId]/hooks/usePullRequestActions/usePullRequestActions.ts",
+      "status": "modified",
+      "sha": "f39f6e6e80b9ad99ce621128a71de4dda31e9c31"
+    },
+    {
+      "path": "apps/mobile/screens/RootLayout/RootLayout.tsx",
+      "status": "modified",
+      "sha": "c8cc1576f91bd7094791a566fa7774c1d97c0c95"
+    },
+    {
+      "path": "apps/mobile/screens/account-pending-deletion/AccountPendingDeletionScreen.tsx",
+      "status": "modified",
+      "sha": "1dec1a5a179cf8348725121e787fab93a51b559a"
+    },
+    {
+      "path": "apps/mobile/scripts/generate-terminal-html.ts",
+      "status": "modified",
+      "sha": "5919fbea90cd6a282d7bb40a3329f8941ca0ea70"
+    },
+    {
+      "path": "apps/mobile/targets/agentactivity/AgentActivityAttributes.swift",
+      "status": "added",
+      "sha": "76c4e67839f7ca81c13fcbb87d36a21a72f21023"
+    },
+    {
+      "path": "apps/mobile/targets/agentactivity/AgentActivityWidget.swift",
+      "status": "added",
+      "sha": "17f01cee4be16295762a16d16131c6af297fad13"
+    },
+    {
+      "path": "apps/mobile/targets/agentactivity/Info.plist",
+      "status": "added",
+      "sha": "0ff23a74c850b5f43a125e27fc3f8d526e6c5710"
+    },
+    {
+      "path": "apps/mobile/targets/agentactivity/expo-target.config.js",
+      "status": "added",
+      "sha": "feaef020d1e0adee3a7e6431f7d43f6559aa8c5d"
+    },
+    {
+      "path": "apps/mobile/tsconfig.json",
+      "status": "modified",
+      "sha": "6e0fefbeff1d2e55a859413ce838a95f82bb342c"
+    },
+    {
+      "path": "apps/relay/src/index.ts",
+      "status": "modified",
+      "sha": "8b0a746278e9b43fbee82a2d47993b36a779c07c"
+    },
+    {
+      "path": "apps/usercontent/src/index.ts",
+      "status": "modified",
+      "sha": "0a42e65e016f07786d08ae80627e961e108515d9"
+    },
+    {
+      "path": "apps/web/sentry.edge.config.ts",
+      "status": "modified",
+      "sha": "aeb7a7afeb504c60758062a455ced1e0ae71b425"
+    },
+    {
+      "path": "apps/web/sentry.server.config.ts",
+      "status": "modified",
+      "sha": "aeb7a7afeb504c60758062a455ced1e0ae71b425"
+    },
+    {
+      "path": "apps/web/src/app/(auth)/layout.tsx",
+      "status": "modified",
+      "sha": "4b6518c36a2638a22b998bc0972d2d8e9886497e"
+    },
+    {
+      "path": "apps/web/src/app/automations/[automationId]/page.tsx",
+      "status": "added",
+      "sha": "e9d1137bf7f128a62e215d265fddaa153c33f349"
+    },
+    {
+      "path": "apps/web/src/app/page/[slug]/components/PageCommentsShell/PageCommentsShell.tsx",
+      "status": "modified",
+      "sha": "1e2c7e90bd2b3cdf8afac8090b3f0bfa14cb3a73"
+    },
+    {
+      "path": "apps/web/src/app/page/[slug]/components/PageCommentsShell/hooks/usePageCommentStore/usePageCommentStore.ts",
+      "status": "modified",
+      "sha": "e747a2c937d4540b1157ff7ee7181fc6d9abbe38"
+    },
+    {
+      "path": "apps/web/src/app/page/[slug]/page.tsx",
+      "status": "modified",
+      "sha": "22e386ba99f74d1ae7e11e22db39272d3f4244bc"
+    },
+    {
+      "path": "apps/web/src/app/tasks/[slug]/page.tsx",
+      "status": "modified",
+      "sha": "569006f7793830ac55de5813d007f24d18b24d34"
+    },
+    {
+      "path": "apps/web/src/components/DeepLinkRedirect/DeepLinkRedirect.tsx",
+      "status": "added",
+      "sha": "e22fed76437d38ce42cdd91aa77870a63923cdeb"
+    },
+    {
+      "path": "apps/web/src/components/DeepLinkRedirect/index.ts",
+      "status": "added",
+      "sha": "f31368fd4b52109596c5e79b602910c48cbfae85"
+    },
+    {
+      "path": "apps/web/src/instrumentation-client.ts",
+      "status": "modified",
+      "sha": "e4380c59553253022c00cd052358f5e5f212772c"
+    },
+    {
+      "path": "apps/web/src/proxy-routes.test.ts",
+      "status": "modified",
+      "sha": "4f4a6b6d7d41049946f0461934d856dd8d75af5f"
+    },
+    {
+      "path": "apps/web/src/proxy-routes.ts",
+      "status": "modified",
+      "sha": "18b6a112443de649970d18112ba11c640dbc611a"
+    },
+    {
+      "path": "bun.lock",
+      "status": "modified",
+      "sha": "46e0a03a1c59c5df8add280ed0b00e3a3efe66eb"
+    },
+    {
+      "path": "docs/environment-variables.md",
+      "status": "modified",
+      "sha": "f635c55fe1d4f126d94868c178fbc13b451a1f14"
+    },
+    {
+      "path": "package.json",
+      "status": "modified",
+      "sha": "c600aafb775b12e49c03dedef47d38c5df3c135b"
+    },
+    {
+      "path": "packages/agent-setup/src/agent-wrappers-claude-codex-opencode.ts",
+      "status": "modified",
+      "sha": "30537ecc8ec7041e2946c9447d153342df15742a"
+    },
+    {
+      "path": "packages/agent-setup/src/agent-wrappers-common.ts",
+      "status": "modified",
+      "sha": "fce743d5549094e95a947958525be39bdfb83d42"
+    },
+    {
+      "path": "packages/agent-setup/src/agent-wrappers-copilot.ts",
+      "status": "modified",
+      "sha": "ff55236ee3ce9fd86194bae78674099288b828bc"
+    },
+    {
+      "path": "packages/agent-setup/src/agent-wrappers-cursor.ts",
+      "status": "modified",
+      "sha": "e7220364c541bd1993b7e54d83aef69551d11dab"
+    },
+    {
+      "path": "packages/agent-setup/src/agent-wrappers-gemini.ts",
+      "status": "modified",
+      "sha": "ab298ab733c82434c2e9f4cf5e99d0733014c055"
+    },
+    {
+      "path": "packages/agent-setup/src/agent-wrappers-grok.ts",
+      "status": "modified",
+      "sha": "2eb2892dbfa289cdae3af5978e9edd7c94d9eee6"
+    },
+    {
+      "path": "packages/agent-setup/src/agent-wrappers-kimi.ts",
+      "status": "modified",
+      "sha": "2670a582a272f4ff288a58a8d36e30d46bdf2236"
+    },
+    {
+      "path": "packages/agent-setup/src/agent-wrappers-launch-report.test.ts",
+      "status": "modified",
+      "sha": "7ea97406fc73cada5085549a2bfd99e9cd7239cb"
+    },
+    {
+      "path": "packages/agent-setup/src/agent-wrappers.test.ts",
+      "status": "modified",
+      "sha": "547231695b3e8a6bea3ce0bece97c68c4c4eb6d6"
+    },
+    {
+      "path": "packages/agent-setup/src/notify-hook.test.ts",
+      "status": "modified",
+      "sha": "094887eff298709b6479aa59f9589831ea77bd9b"
+    },
+    {
+      "path": "packages/agent-setup/src/notify-hook.ts",
+      "status": "modified",
+      "sha": "5568c6750828d4b26cd89c63c99db9ab4b3fd79b"
+    },
+    {
+      "path": "packages/agent-setup/templates/amp-plugin.template.ts",
+      "status": "modified",
+      "sha": "f6af03e21637e8c0ee74775f29182dac145f037a"
+    },
+    {
+      "path": "packages/agent-setup/templates/copilot-hook.template.sh",
+      "status": "modified",
+      "sha": "e513acbef80e668bf344efb79945c19dbbc85083"
+    },
+    {
+      "path": "packages/agent-setup/templates/cursor-hook.template.sh",
+      "status": "modified",
+      "sha": "c31f7c5eb00cd87448e1ea721a923b7ff09e6875"
+    },
+    {
+      "path": "packages/agent-setup/templates/gemini-hook.template.sh",
+      "status": "modified",
+      "sha": "6cb851bd7835c14243eb518ec46d040cb230aa31"
+    },
+    {
+      "path": "packages/agent-setup/templates/notify-hook.template.sh",
+      "status": "modified",
+      "sha": "70c9822ada620ccf72a30e1ff248872bf9e43290"
+    },
+    {
+      "path": "packages/agent-setup/templates/omp-extension.template.ts",
+      "status": "modified",
+      "sha": "39862bca1130bba51279bbb2cf2e9e6a9d975ee1"
+    },
+    {
+      "path": "packages/agent-setup/templates/opencode-plugin.template.js",
+      "status": "modified",
+      "sha": "eaddba4537a038e4d2d9b266df7e58b6a919ed7d"
+    },
+    {
+      "path": "packages/agent-setup/templates/pi-extension.template.ts",
+      "status": "modified",
+      "sha": "bcfe98757bc414b1265763dbc48c9ce311c27b3d"
+    },
+    {
+      "path": "packages/auth/src/lib/analytics.ts",
+      "status": "added",
+      "sha": "41d0ed2921a40b87df6479750e7fd8b0b74bfbff"
+    },
+    {
+      "path": "packages/auth/src/lib/billing-analytics.ts",
+      "status": "added",
+      "sha": "6aa2e04acbc537fca3eb3fb8c943ab1def95391f"
+    },
+    {
+      "path": "packages/auth/src/lib/lifecycle.ts",
+      "status": "modified",
+      "sha": "5b1ea35311c8207eb0a9b4f2eba299a1d6078294"
+    },
+    {
+      "path": "packages/auth/src/server.ts",
+      "status": "modified",
+      "sha": "310159fa0e28a26d20606954880d6e15095c6559"
+    },
+    {
+      "path": "packages/cli/package.json",
+      "status": "modified",
+      "sha": "d5d8a19c878b95e752c7d1b8b5dda82bd856c5e3"
+    },
+    {
+      "path": "packages/cli/scripts/self-update-e2e.sh",
+      "status": "added",
+      "sha": "6ff10813df17e8458bd4d41ace98d9af8310b720"
+    },
+    {
+      "path": "packages/cli/src/commands/update/atomic-replace.test.ts",
+      "status": "added",
+      "sha": "48359a909d487a8f4843ff0f5a1ca821b09a72cf"
+    },
+    {
+      "path": "packages/cli/src/commands/update/atomic-replace.ts",
+      "status": "added",
+      "sha": "87ab9d06c25d44f265a28a6c7154105fa9841253"
+    },
+    {
+      "path": "packages/cli/src/commands/update/command.ts",
+      "status": "modified",
+      "sha": "932cd3fa53c0743504188ed0e68d4b5ee94c9f45"
+    },
+    {
+      "path": "packages/cli/src/lib/host/spawn.ts",
+      "status": "modified",
+      "sha": "f448a93ab7c94ed4de465bc2d624aef2601f447e"
+    },
+    {
+      "path": "packages/db/drizzle/0110_add_v2_hosts_version_columns.sql",
+      "status": "added",
+      "sha": "110bff8a04b4fb0086313eb84302e4b4cf0840f4"
+    },
+    {
+      "path": "packages/db/drizzle/meta/0110_snapshot.json",
+      "status": "added",
+      "sha": "ff25f04475c2a2463e89b1ab308e6738eeacc81d"
+    },
+    {
+      "path": "packages/db/drizzle/meta/_journal.json",
+      "status": "modified",
+      "sha": "b89f6fca3e346d18db6040583c1e360c01170ea5"
+    },
+    {
+      "path": "packages/db/src/schema/ingest.ts",
+      "status": "modified",
+      "sha": "3fb7505f6db91074923b1b3fabaa39eaf32f183c"
+    },
+    {
+      "path": "packages/db/src/schema/schema.ts",
+      "status": "modified",
+      "sha": "ec923840431dab6be049cc568ace5d90dc99335d"
+    },
+    {
+      "path": "packages/host-service/drizzle/0033_binding_resumed_into.sql",
+      "status": "added",
+      "sha": "59ead25d6455b4351f9de5416aecb008f0c64488"
+    },
+    {
+      "path": "packages/host-service/drizzle/meta/0033_snapshot.json",
+      "status": "added",
+      "sha": "d2a405d51422b660a1385fbb7a2d7ff0aee090a2"
+    },
+    {
+      "path": "packages/host-service/drizzle/meta/_journal.json",
+      "status": "modified",
+      "sha": "ae4b75cdce05a78acc62f68f496f9f3437692030"
+    },
+    {
+      "path": "packages/host-service/package.json",
+      "status": "modified",
+      "sha": "08b486495735ea3d47516240471db26522b23d9e"
+    },
+    {
+      "path": "packages/host-service/src/db/db.ts",
+      "status": "modified",
+      "sha": "6fa21976f732479c83a5da451eb5bf635829fbd4"
+    },
+    {
+      "path": "packages/host-service/src/db/migrations.test.ts",
+      "status": "added",
+      "sha": "be7c0beb653d3ff9783d0bd6660963dfe4e16727"
+    },
+    {
+      "path": "packages/host-service/src/db/schema.ts",
+      "status": "modified",
+      "sha": "f2057535702d4296b07f2fc81981b5834b168334"
+    },
+    {
+      "path": "packages/host-service/src/events/event-bus.ts",
+      "status": "modified",
+      "sha": "e32893436ee200bcaca1028eb87a0c5df46ee964"
+    },
+    {
+      "path": "packages/host-service/src/events/index.ts",
+      "status": "modified",
+      "sha": "2a7031fa40f32a5c30c249cb2fffd86cac28502f"
+    },
+    {
+      "path": "packages/host-service/src/events/types.ts",
+      "status": "modified",
+      "sha": "10eb4cdfa1f321121990c2326f0d5d4a6b55ab96"
+    },
+    {
+      "path": "packages/host-service/src/index.ts",
+      "status": "modified",
+      "sha": "ee831523e67a2c481863c7104c5705780bd5e479"
+    },
+    {
+      "path": "packages/host-service/src/install-source.ts",
+      "status": "added",
+      "sha": "a14b7a74dd96180537253578419e8951097d2422"
+    },
+    {
+      "path": "packages/host-service/src/runtime/git/identity.test.ts",
+      "status": "modified",
+      "sha": "4e50a95b7ab3094679da88bb5dc320e31ba8a730"
+    },
+    {
+      "path": "packages/host-service/src/runtime/git/identity.ts",
+      "status": "modified",
+      "sha": "9cb75a4e79840a5f3424fbbceea1b810b624f3f4"
+    },
+    {
+      "path": "packages/host-service/src/runtime/login-shell-env.test.ts",
+      "status": "modified",
+      "sha": "fcb8dcf31925dddae307a412bd409888eea7b2f1"
+    },
+    {
+      "path": "packages/host-service/src/runtime/login-shell-env.ts",
+      "status": "modified",
+      "sha": "3d219e872534a94daa7d6b7cb7b730b28982c84c"
+    },
+    {
+      "path": "packages/host-service/src/runtime/working-directory.test.ts",
+      "status": "added",
+      "sha": "681b41884880811f09edc429b30c4c55efa790a5"
+    },
+    {
+      "path": "packages/host-service/src/runtime/working-directory.ts",
+      "status": "added",
+      "sha": "9c1ae6a4ebb995a21bf2462dfebe02b980592028"
+    },
+    {
+      "path": "packages/host-service/src/self-update/SelfUpdater.test.ts",
+      "status": "added",
+      "sha": "a3ad8833f36e8bbe6029af55c665c5b35eab3069"
+    },
+    {
+      "path": "packages/host-service/src/self-update/SelfUpdater.ts",
+      "status": "added",
+      "sha": "72862bb347bb9e34a86329010e3c38cc35d5433d"
+    },
+    {
+      "path": "packages/host-service/src/self-update/index.ts",
+      "status": "added",
+      "sha": "0dea87aa2acbf58607c2b54e249c9f585d97bc89"
+    },
+    {
+      "path": "packages/host-service/src/sentry.ts",
+      "status": "modified",
+      "sha": "b2b3ecac1b99fd25581f03e3e8722f1c83b86de4"
+    },
+    {
+      "path": "packages/host-service/src/serve.ts",
+      "status": "modified",
+      "sha": "8ffa87a5680faa5cb748731826a8a48192e8736c"
+    },
+    {
+      "path": "packages/host-service/src/terminal-agents/persistence.ts",
+      "status": "modified",
+      "sha": "94398ab82c76cc3b38b9f0108575de5c2ab49de8"
+    },
+    {
+      "path": "packages/host-service/src/terminal/clean-shell-env.test.ts",
+      "status": "modified",
+      "sha": "6a064e75198a86db47d939e6b52ba00d186d72f6"
+    },
+    {
+      "path": "packages/host-service/src/terminal/clean-shell-env.ts",
+      "status": "modified",
+      "sha": "de133342bf00770acf119169039142d41383ab46"
+    },
+    {
+      "path": "packages/host-service/src/terminal/terminal.seq-catchup.node-test.ts",
+      "status": "modified",
+      "sha": "cf4e29873f90a911fb212d0381bff573ea70db66"
+    },
+    {
+      "path": "packages/host-service/src/terminal/terminal.ts",
+      "status": "modified",
+      "sha": "ea931dfc88a2257d9f5d0b69e8c370c37fa8e74f"
+    },
+    {
+      "path": "packages/host-service/src/trpc/off-loop.test.ts",
+      "status": "modified",
+      "sha": "14f5ea5a34daf1b081b223a6853b86cfd618654d"
+    },
+    {
+      "path": "packages/host-service/src/trpc/off-loop.ts",
+      "status": "modified",
+      "sha": "8b1d987be1bd7b384bb329ad55cef82460222d76"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/git/git.ts",
+      "status": "modified",
+      "sha": "68550b1835106e596124e08a946affc3ce168a94"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/git/utils/classify-git-error.test.ts",
+      "status": "modified",
+      "sha": "8e4164edff81fe4e2a9d15a212242177fc664a94"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/git/utils/classify-git-error.ts",
+      "status": "modified",
+      "sha": "a935ff52c43b81aaa36b0a52bc986f354681d2ba"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/git/utils/diff-patch.test.ts",
+      "status": "added",
+      "sha": "1e7885db16930e6f0bf8e30bd711b323a71194ee"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/git/utils/diff-patch.ts",
+      "status": "modified",
+      "sha": "d87f0f8e1673fd8ed8a0f04fe8688e4b6e846c01"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/git/utils/spawn-failure-diagnostics.ts",
+      "status": "modified",
+      "sha": "d234c2dbc6ec98e24592428e82c4bfbe1832e602"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/health/health.ts",
+      "status": "modified",
+      "sha": "79856cb1b1b38db47bc2aa2f82ad17bc787019ac"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/host/host.ts",
+      "status": "modified",
+      "sha": "701acb356ec36e1724f1d10ba21218b4a8b93778"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/router.ts",
+      "status": "modified",
+      "sha": "d031d669f8fb2271ae4c1905928bf59071d9320a"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/system/index.ts",
+      "status": "added",
+      "sha": "23698e72098f8b81e4414d0fe14f1a348b0fd497"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/system/system.test.ts",
+      "status": "added",
+      "sha": "22c1deb6c290377c9206e5337c25f20124bc9b57"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/system/system.ts",
+      "status": "added",
+      "sha": "17a58744eea67e24165d3baf70536f6cd077e228"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/terminal-agents/terminal-agents.test.ts",
+      "status": "modified",
+      "sha": "b334c5bd5761bc501885d43f4b686bda7cd43338"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/terminal-agents/terminal-agents.ts",
+      "status": "modified",
+      "sha": "d22030035e9fda3a5f2e1c454e3cc33811167daa"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/usage/history/agy.ts",
+      "status": "modified",
+      "sha": "da8ef54c1e5644a776a4fdbe317d96c579bd4987"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/usage/history/parse.test.ts",
+      "status": "added",
+      "sha": "3d751f062bab070b208a0074c62f58d3709a2623"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/usage/history/parse.ts",
+      "status": "modified",
+      "sha": "9ff99a9219436071a235094206feaf33954e2c09"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/workspace-cleanup/remove-directory-tree.ts",
+      "status": "added",
+      "sha": "c03dbc9296fd975cc9425d33f85b5dcda964a40f"
+    },
+    {
+      "path": "packages/host-service/src/trpc/router/workspace-cleanup/workspace-cleanup.ts",
+      "status": "modified",
+      "sha": "582c8e8f7873959d074fdfb65280a1f105939ef0"
+    },
+    {
+      "path": "packages/host-service/src/trpc/worker-abort.ts",
+      "status": "added",
+      "sha": "ab2de8d9e482ec4cad8d5ef5c413118e21272ed1"
+    },
+    {
+      "path": "packages/host-service/src/tunnel/connect.ts",
+      "status": "modified",
+      "sha": "d1a07c7880d9d27280d750b6b672dfaa88f3edde"
+    },
+    {
+      "path": "packages/host-service/src/workers/WorkerTaskRunner.ts",
+      "status": "modified",
+      "sha": "96ad660e7a50c909e4c423159df2a09462c5b405"
+    },
+    {
+      "path": "packages/host-service/src/workers/host-worker-pool.ts",
+      "status": "modified",
+      "sha": "065bc35f2331af3f3702a3581e788c44889f0b83"
+    },
+    {
+      "path": "packages/host-service/src/workers/tasks/git.ts",
+      "status": "modified",
+      "sha": "2f911c2fa86dd1223c5d0ac5d5a2964f60a5e580"
+    },
+    {
+      "path": "packages/host-service/test/integration/smoke.integration.test.ts",
+      "status": "modified",
+      "sha": "22c5b88d47bedf0c9df7f72e3f79e33be97aa14c"
+    },
+    {
+      "path": "packages/host-service/test/remove-directory-tree.test.ts",
+      "status": "added",
+      "sha": "4ce2d828c80316a3ff5e8f8223572ecdfe1949f7"
+    },
+    {
+      "path": "packages/host-service/test/workspace-cleanup.test.ts",
+      "status": "modified",
+      "sha": "ebf33ed2d35594216153dc8576ca6a1007df7ad6"
+    },
+    {
+      "path": "packages/i18n/locales/cs/messages.po",
+      "status": "modified",
+      "sha": "d1ea3bc9cc1fbe05f6ffb8459839c21227d3ff62"
+    },
+    {
+      "path": "packages/i18n/locales/de/messages.po",
+      "status": "modified",
+      "sha": "998901a83f5f150c04275d6c09a9ddc213900da7"
+    },
+    {
+      "path": "packages/i18n/locales/en/messages.po",
+      "status": "modified",
+      "sha": "a1a68e61676b9ca09f8c8a7787ee480a6e3f88de"
+    },
+    {
+      "path": "packages/i18n/locales/es/messages.po",
+      "status": "modified",
+      "sha": "d04a02a94458ee16977a16708fc4d5c9dc947f7d"
+    },
+    {
+      "path": "packages/i18n/locales/fr/messages.po",
+      "status": "modified",
+      "sha": "4622dfd72abdd276926cc569be08b2829f6c25a4"
+    },
+    {
+      "path": "packages/i18n/locales/id/messages.po",
+      "status": "modified",
+      "sha": "c8a2967ab90d52cff3d05fa251026e6ec126841c"
+    },
+    {
+      "path": "packages/i18n/locales/it/messages.po",
+      "status": "modified",
+      "sha": "8b88c114ec7acc7dbcb9ea7560e5250dc954dd1b"
+    },
+    {
+      "path": "packages/i18n/locales/ja/messages.po",
+      "status": "modified",
+      "sha": "2d7e33ddd6505080d7f26bb73d11de5078879b4f"
+    },
+    {
+      "path": "packages/i18n/locales/ko/messages.po",
+      "status": "modified",
+      "sha": "e043333b822b5cfc9dae296d3fdbf321587d46bf"
+    },
+    {
+      "path": "packages/i18n/locales/nl/messages.po",
+      "status": "modified",
+      "sha": "59d27ef73927bbb04f9fce98deb6f24119b3d06a"
+    },
+    {
+      "path": "packages/i18n/locales/pl/messages.po",
+      "status": "modified",
+      "sha": "92a1829da2302cbada8e6bb403e5d707555944ad"
+    },
+    {
+      "path": "packages/i18n/locales/pt-BR/messages.po",
+      "status": "modified",
+      "sha": "16e4b97d05ebec6ee134a8072f86ab0aa6e338ac"
+    },
+    {
+      "path": "packages/i18n/locales/ru/messages.po",
+      "status": "modified",
+      "sha": "dd8ffe32e0fd116ba9edb7ae092fe1ef92d9d229"
+    },
+    {
+      "path": "packages/i18n/locales/tr/messages.po",
+      "status": "modified",
+      "sha": "f1f8f2aa20d954bedc3893d54cf9b96a92b7b71e"
+    },
+    {
+      "path": "packages/i18n/locales/vi/messages.po",
+      "status": "modified",
+      "sha": "a9aa627e5b3bcf3721f77f27a2449195e7f0e4b9"
+    },
+    {
+      "path": "packages/i18n/locales/zh-CN/messages.po",
+      "status": "modified",
+      "sha": "ea85cb5db0200a5899cb59b16c53cd591f4c0f97"
+    },
+    {
+      "path": "packages/i18n/locales/zh-TW/messages.po",
+      "status": "modified",
+      "sha": "577340cc71e35ff5ea077b286da1a30373676515"
+    },
+    {
+      "path": "packages/i18n/src/format/index.ts",
+      "status": "modified",
+      "sha": "b2e336c6ea349acf74fff9350fb9dd1832c29403"
+    },
+    {
+      "path": "packages/i18n/src/index.ts",
+      "status": "modified",
+      "sha": "9a2160a87843ba9a24cf16417ceb6f312df16d04"
+    },
+    {
+      "path": "packages/i18n/src/react.tsx",
+      "status": "modified",
+      "sha": "48ee17df9843d8814e71253705670e136959aedc"
+    },
+    {
+      "path": "packages/i18n/src/server-errors.ts",
+      "status": "modified",
+      "sha": "09e0697fe405d451d9b081d1a93c05bc384c9a88"
+    },
+    {
+      "path": "packages/i18n/test/display-only.test.ts",
+      "status": "modified",
+      "sha": "e380a072b4713c0641860e6cbf81ec160031323a"
+    },
+    {
+      "path": "packages/shared/package.json",
+      "status": "modified",
+      "sha": "c50843ecdd97740f0ac8d965414efc2dafbd8c45"
+    },
+    {
+      "path": "packages/shared/src/constants.ts",
+      "status": "modified",
+      "sha": "15fbe7c059d82f6327dbd5b072c844a5818eaa5f"
+    },
+    {
+      "path": "packages/shared/src/host-version.test.ts",
+      "status": "added",
+      "sha": "9f28f4059491992634c5ad707f26570ca60ea5fa"
+    },
+    {
+      "path": "packages/shared/src/host-version.ts",
+      "status": "modified",
+      "sha": "e847b43b80b6e0ce67963e546e91c2419319bb95"
+    },
+    {
+      "path": "packages/shared/src/install-update-lock.test.ts",
+      "status": "added",
+      "sha": "c9d47cc10a29191b77b0af17f433601c3bb0c1ad"
+    },
+    {
+      "path": "packages/shared/src/install-update-lock.ts",
+      "status": "added",
+      "sha": "85d4e7fb896f564dd289553b225d22204d9fe490"
+    },
+    {
+      "path": "packages/shared/src/sqlite-migrations/index.ts",
+      "status": "added",
+      "sha": "b40abce95a16899f27bcc4744aa4823bea1b5677"
+    },
+    {
+      "path": "packages/shared/src/sqlite-migrations/runMigrations.test.ts",
+      "status": "added",
+      "sha": "9087c7b8e70f0dfdaa3988af1fadd61efce766ac"
+    },
+    {
+      "path": "packages/shared/src/sqlite-migrations/runMigrations.ts",
+      "status": "added",
+      "sha": "786ac575fadff3902438782ddb088f7ed804f23e"
+    },
+    {
+      "path": "packages/shared/src/usercontent/index.ts",
+      "status": "modified",
+      "sha": "bc223cd86682c14b2b1ac77b96967c9cd0623bf9"
+    },
+    {
+      "path": "packages/shared/src/usercontent/inject.test.ts",
+      "status": "added",
+      "sha": "5deca6f59c299d56bcab35216d3f9d46c6fdaf60"
+    },
+    {
+      "path": "packages/shared/src/usercontent/inject.ts",
+      "status": "modified",
+      "sha": "46f7d75cfc7ccf32f0943dd05cb510393d0ea4db"
+    },
+    {
+      "path": "packages/shared/src/usercontent/theme.ts",
+      "status": "added",
+      "sha": "cd983c499572adbe37654790ba34eab8f54d868e"
+    },
+    {
+      "path": "packages/trpc/src/env.ts",
+      "status": "modified",
+      "sha": "c6c066e0a9bb8ac5c3942d5e12112187f651f2be"
+    },
+    {
+      "path": "packages/trpc/src/router/automation/automation.ts",
+      "status": "modified",
+      "sha": "8ba439170e672f1359ea8c8064eecf60e9608da2"
+    },
+    {
+      "path": "packages/trpc/src/router/automation/dispatch.ts",
+      "status": "modified",
+      "sha": "2bef61172b94968100e40f1a581e076e26e5bc6f"
+    },
+    {
+      "path": "packages/trpc/src/router/automation/helpers.ts",
+      "status": "modified",
+      "sha": "0f9b07e131003c871757ae746ea6f4f56b72b0d7"
+    },
+    {
+      "path": "packages/trpc/src/router/host/host.ts",
+      "status": "modified",
+      "sha": "89c61cce2dd1f120d93a7e21fccd583e75ea1238"
+    },
+    {
+      "path": "packages/trpc/src/router/host/registration.test.ts",
+      "status": "added",
+      "sha": "7847726142677908b7074c351b52055300e60284"
+    },
+    {
+      "path": "packages/trpc/src/router/host/registration.ts",
+      "status": "added",
+      "sha": "8fd239347ed055b76409f47ddc0f8cf638ae6296"
+    },
+    {
+      "path": "packages/trpc/src/router/host/update-access.test.ts",
+      "status": "added",
+      "sha": "64f433e99d57bb20730a8395b4717ec7e84fef31"
+    },
+    {
+      "path": "packages/trpc/src/router/host/update-access.ts",
+      "status": "added",
+      "sha": "c736522de7e4d8c30e2bbe5972e865550c1117a2"
+    },
+    {
+      "path": "packages/trpc/src/router/leaderboard/internal-read.test.ts",
+      "status": "added",
+      "sha": "46bd02f4053d9a52741cfe9614baef2219cd7e45"
+    },
+    {
+      "path": "packages/trpc/src/router/leaderboard/internal-read.ts",
+      "status": "added",
+      "sha": "57dcfab29611db78cc364b90ccf9ff9eec18dc03"
+    },
+    {
+      "path": "packages/trpc/src/router/leaderboard/leaderboard.ts",
+      "status": "modified",
+      "sha": "d366eaf1161da18d03a5ec0414d04f0e9ce9c69d"
+    },
+    {
+      "path": "packages/trpc/src/router/leaderboard/reserved-handles.test.ts",
+      "status": "modified",
+      "sha": "47289ce17b73d7ce25a5dd2c2d6f33f22ca399b0"
+    },
+    {
+      "path": "packages/trpc/src/router/leaderboard/reserved-handles.ts",
+      "status": "modified",
+      "sha": "5514b6d48eac8c0d53253f7ba2aa14efa5e498a3"
+    },
+    {
+      "path": "packages/trpc/src/router/leaderboard/schema.ts",
+      "status": "modified",
+      "sha": "367c697166032b75bd16a26a6df10cb4e50b43fe"
+    },
+    {
+      "path": "packages/trpc/src/router/page-comment/page-comment.ts",
+      "status": "modified",
+      "sha": "5240797e62c77a0708a504bbea0097ae3dd2c17c"
+    },
+    {
+      "path": "packages/trpc/src/router/v2-host/v2-host.ts",
+      "status": "modified",
+      "sha": "825091cc988045644859a7f52eda8a97869e56f3"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/AllCommentsButton/AllCommentsButton.tsx",
+      "status": "added",
+      "sha": "1cf98425e6b31fabfb666ec38c460caa757765f2"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/AllCommentsButton/index.ts",
+      "status": "added",
+      "sha": "514f055df2a9d3c10531ee0e38e5d9ddbb2a1cb8"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentComposer/CommentComposer.tsx",
+      "status": "added",
+      "sha": "cbe06903724118bc8050ef45a86cbcca59d92e90"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentComposer/index.ts",
+      "status": "added",
+      "sha": "23c2057e4424e9613859be280121970913a0d913"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentList/CommentList.tsx",
+      "status": "added",
+      "sha": "46574fcb38a0d47735286c78f143ae4b43bcfb5e"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentList/components/Quote/Quote.tsx",
+      "status": "added",
+      "sha": "c46155779d261795ffc7efc1511bfbb6d1b6020c"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentList/components/Quote/index.ts",
+      "status": "added",
+      "sha": "0aedb0fee5e1765f9bef398d9c62a1b7adfad5d9"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentList/index.ts",
+      "status": "added",
+      "sha": "65a9abcb8957dff5df470a05dbd120200f550924"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsPanel/CommentsPanel.tsx",
+      "status": "added",
+      "sha": "ddcd2d2b20953609410128d9839b274767896a1d"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsPanel/components/PanelThread/PanelThread.tsx",
+      "status": "added",
+      "sha": "a5cf8ed98b39469f5107d17a7973e4fe30c2c4c4"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsPanel/components/PanelThread/index.ts",
+      "status": "added",
+      "sha": "bc791d1983bbd08565b472b2460812096f5cc5d0"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsPanel/index.ts",
+      "status": "added",
+      "sha": "a877ddc595d91554ebf274fa60e3f45c17db7fcf"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsPanel/utils/groupThreads/groupThreads.test.ts",
+      "status": "added",
+      "sha": "ab8f4a8f60d9211eb0e2bea6c3a1e8905d4d31ba"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsPanel/utils/groupThreads/groupThreads.ts",
+      "status": "added",
+      "sha": "cf9d3bd7147807ac9df866c9e8021543d465a122"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsPanel/utils/groupThreads/index.ts",
+      "status": "added",
+      "sha": "ca0d3c0fe79553b82dd7cead2275043df5719e52"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/PageCommentsView/PageCommentsView.tsx",
+      "status": "modified",
+      "sha": "df6cddd51fe96db6ab85895e2d12917ebbcbd208"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/PageCommentsView/components/CommentPopover/CommentPopover.tsx",
+      "status": "modified",
+      "sha": "a04419d8bb23d6b9fa2673e9262117cd1a67f711"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/PageCommentsView/components/CommentPopover/index.ts",
+      "status": "modified",
+      "sha": "98288a902c08749781a37f87c763b859455c1be9"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/PageHeader/components/PageSharePopover/PageSharePopover.tsx",
+      "status": "modified",
+      "sha": "f6e7b6b391cbe67c2a63381d03d6016641167cd7"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/index.ts",
+      "status": "modified",
+      "sha": "4b7d0154a03853aa7dc390e131c6357fbd18d8bd"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/providers/CommentProvider/CommentProvider.tsx",
+      "status": "modified",
+      "sha": "74146ab7a92b4dfea932c584458d26af0eac5fb7"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/utils/optimisticId/index.ts",
+      "status": "added",
+      "sha": "28d7638669991b163dbcb4e5c7e672d15336e919"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/utils/optimisticId/optimisticId.test.ts",
+      "status": "added",
+      "sha": "573e028f7ea3d24cedb151d10ab50da3cc3e113e"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/utils/optimisticId/optimisticId.ts",
+      "status": "added",
+      "sha": "c4a5093df755bd609dd1ff6f6ef9c75b14c9f8a0"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/utils/relativeTime/relativeTime.ts",
+      "status": "modified",
+      "sha": "a2e9c44519517c23d138873c56590705cbb6b987"
+    },
+    {
+      "path": "packages/ui/src/components/mesh-gradient.tsx",
+      "status": "modified",
+      "sha": "2d281d9c95df0da066959d6651dbfb9817f9071a"
+    },
+    {
+      "path": "packages/ui/src/components/ui/input-group.tsx",
+      "status": "modified",
+      "sha": "edc95d916ff0888f8c3283cd8035853d72bf4ce7"
+    },
+    {
+      "path": "packages/workspace-client/src/lib/eventBus.test.ts",
+      "status": "modified",
+      "sha": "024aedf5d6f61c543fba8c0132e4832b38754ea5"
+    },
+    {
+      "path": "packages/workspace-client/src/lib/eventBus.ts",
+      "status": "modified",
+      "sha": "0f8745bfff6c51902ad7058392e0e25fc8fde4c7"
+    },
+    {
+      "path": "packages/workspace-client/src/lib/relaySocket/relaySocket.ts",
+      "status": "modified",
+      "sha": "498d979ee12237344586d98940fffb9ff2b8886d"
+    },
+    {
+      "path": "packages/workspace-fs/src/find-nested-repos.test.ts",
+      "status": "modified",
+      "sha": "83e0c843e8ed1cfd17bd2d9ffd5212176e46f6d1"
+    },
+    {
+      "path": "packages/workspace-fs/src/find-nested-repos.ts",
+      "status": "modified",
+      "sha": "16cb8e2dc2f31f087cf620c1f1494fd98799680c"
+    },
+    {
+      "path": "packages/workspace-fs/src/watch.ts",
+      "status": "modified",
+      "sha": "844d2208ad8052517809499ee91dd6fdd57a72bd"
+    },
+    {
+      "path": "patches/@xterm%2Fxterm@6.1.0-beta.302.patch",
+      "status": "modified",
+      "sha": "fe2bfbb434d0ab8ccd021a8c9b4d879c71d8822d"
+    },
+    {
+      "path": "patches/README.md",
+      "status": "modified",
+      "sha": "290e084457dadde64b8d008f445a74d5838bb4ce"
+    },
+    {
+      "path": "patches/trpc-electron@0.1.2.patch",
+      "status": "added",
+      "sha": "4cd24938cabd6116ad89af372ea4f5a14c866f14"
+    },
+    {
+      "path": "plans/agent-session-ownership.md",
+      "status": "added",
+      "sha": "ab446827872480ce1d3a05bc4624b86bfe15f4b0"
+    },
+    {
+      "path": "plugins/superset/skills/10x/SKILL.md",
+      "status": "modified",
+      "sha": "80cf3f225cf308a6e7c1935e2e42498169cd4d35"
+    },
+    {
+      "path": "plugins/superset/skills/automate/SKILL.md",
+      "status": "modified",
+      "sha": "50fee9798cf9d6fd13f7ac0d61769d07860dbc34"
+    },
+    {
+      "path": "plugins/superset/skills/browser/SKILL.md",
+      "status": "modified",
+      "sha": "cf144ff406206f69d77e6f975dca870c06ead93c"
+    },
+    {
+      "path": "plugins/superset/skills/computer/SKILL.md",
+      "status": "modified",
+      "sha": "6e793d8ea7d441f71b431e05f4a961b2aca0ecf4"
+    },
+    {
+      "path": "plugins/superset/skills/integrations/SKILL.md",
+      "status": "added",
+      "sha": "3421c0f399de616081d03be05e32c2f7ef85ade3"
+    },
+    {
+      "path": "plugins/superset/skills/integrations/agents/openai.yaml",
+      "status": "added",
+      "sha": "6c1431c90dd72fe18d0f24ef3a57cd89e4161a1e"
+    },
+    {
+      "path": "plugins/superset/skills/orchestrate/SKILL.md",
+      "status": "modified",
+      "sha": "9f551dcba6fbe8aba769e141d2499e236bf37c56"
+    },
+    {
+      "path": "plugins/superset/skills/page/SKILL.md",
+      "status": "modified",
+      "sha": "2829c31a251ee0b1d448943c6807b535f7fe28f9"
+    },
+    {
+      "path": "plugins/superset/skills/plugins/SKILL.md",
+      "status": "modified",
+      "sha": "e7362cc76d33de82e85a3a8af51e83fc298f833f"
+    },
+    {
+      "path": "plugins/superset/skills/standup/SKILL.md",
+      "status": "modified",
+      "sha": "ff5c336c04de4ecb90c9448d985b8a51f3cd57ce"
+    },
+    {
+      "path": "Caddyfile",
+      "status": "deleted",
+      "sha": "35a47187320f753ff02fe6f1b5e13bb8a2c791ca"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/DashboardNewWorkspaceModal.tsx",
+      "status": "deleted",
+      "sha": "e2f283bdd8a65b531d8b6a0338b1a2726786fa3d"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/PromptGroup/PromptGroup.tsx",
+      "status": "deleted",
+      "sha": "3616b1ccd00893da23da28d96ee28281bd21db3c"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/PromptGroup/components/AttachmentButtons/AttachmentButtons.tsx",
+      "status": "deleted",
+      "sha": "1c5f9e9693ccd4f89bf16a0e551026af6838c040"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/PromptGroup/components/AttachmentButtons/index.ts",
+      "status": "deleted",
+      "sha": "1bcf39bf3f031a10b32718325d9e658e1f8903f8"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/PromptGroup/components/UploadingAttachmentPill/UploadingAttachmentPill.tsx",
+      "status": "deleted",
+      "sha": "410b60164d03e7aaca4524d5bb149545b09ea1f2"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/PromptGroup/components/UploadingAttachmentPill/index.ts",
+      "status": "deleted",
+      "sha": "c9c2acb111beecd78cad89d53a31463422c6aed7"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/PromptGroup/index.ts",
+      "status": "deleted",
+      "sha": "61433e9463ce84e698079c40a7f81b6d57b324dc"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceModalContent/DashboardNewWorkspaceModalContent.tsx",
+      "status": "deleted",
+      "sha": "14946debc276ca4f4659b565cc0fe7507956a0d7"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceModalContent/hooks/useSelectedHostProjectIds/index.ts",
+      "status": "deleted",
+      "sha": "d785220c21bae6a4845852bfba70fc46a7b82991"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceModalContent/hooks/useSelectedHostProjectIds/useSelectedHostProjectIds.ts",
+      "status": "deleted",
+      "sha": "a659ea1a4cd85d1d7bb9185fdfd1aa699cc860ef"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceModalContent/index.ts",
+      "status": "deleted",
+      "sha": "67a1b5e21e53fee575541f2f11a64797749f83c2"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/hooks/useNewWorkspaceScreenVariant/index.ts",
+      "status": "deleted",
+      "sha": "5c167d66806e375db0cd94de0ba9875d178f40b3"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/hooks/useNewWorkspaceScreenVariant/useNewWorkspaceScreenVariant.ts",
+      "status": "deleted",
+      "sha": "478c3f1459dbff90aab07c42a2383d2bfb412737"
+    },
+    {
+      "path": "apps/desktop/src/renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/index.ts",
+      "status": "deleted",
+      "sha": "f46f592bdebaabd0d9090da5223402f654dfaa77"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/contact/components/ContactForm/ContactForm.tsx",
+      "status": "deleted",
+      "sha": "28399f539f3cf33b8f54c8cf08362f5913e04235"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/contact/components/ContactForm/index.ts",
+      "status": "deleted",
+      "sha": "2f926e6596fcb85eaa973c0ac6a67cdc27cfa111"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/user/[handle]/assets/Inter-Bold.ttf",
+      "status": "deleted",
+      "sha": "7cb7f4d145f77249f6d6165fb048697fce4f6bba"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/user/[handle]/utils/getInterBold/getInterBold.ts",
+      "status": "deleted",
+      "sha": "99b695ffb9ee1f2b53e5279e7c6cc776683d807a"
+    },
+    {
+      "path": "apps/marketing/src/app/[lang]/user/[handle]/utils/getInterBold/index.ts",
+      "status": "deleted",
+      "sha": "09273449cbb29d15d6ab179b6d5730f8e4b94607"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsSidebar/CommentsSidebar.tsx",
+      "status": "deleted",
+      "sha": "2ca7f1a933d91cf8aab3b986d1aa33f239cb41d6"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsSidebar/components/SidebarThread/SidebarThread.tsx",
+      "status": "deleted",
+      "sha": "2bf3ffd8c9b9d4209a91cf87745a9e201ae7e69b"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsSidebar/components/SidebarThread/index.ts",
+      "status": "deleted",
+      "sha": "c7bbbdee7b772abf299bfaa099a7a86b7f29e8ff"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsSidebar/index.ts",
+      "status": "deleted",
+      "sha": "84e5072015d05beda427700bbe4a92ee065f274c"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsSidebar/utils/groupThreads/groupThreads.test.ts",
+      "status": "deleted",
+      "sha": "38e5adf6982b5d2222232a34f86ddfb0f85cedfd"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsSidebar/utils/groupThreads/groupThreads.ts",
+      "status": "deleted",
+      "sha": "9a7d9cc25be019e1fe22a3c5c3320cc32a8a1047"
+    },
+    {
+      "path": "packages/ui/src/components/PageComments/components/CommentsSidebar/utils/groupThreads/index.ts",
+      "status": "deleted",
+      "sha": "d87fe3cecf740f1fb407e6cc48628b88a596a486"
+    }
+  ]
+}

@@ -33,7 +33,9 @@ The public installation policy overrides personal subscription assumptions and u
 
 The workspace supervisor is the authoritative state writer. `WAITING_INPUT` means an interaction needs attention. `NATIVE_RESUMING` protects the current logical writer while Superset recovery is active. Follow the updated terminal/session binding and do not start a competing writer.
 
-Free → Go recovery requires fresh, reserve-safe Go telemetry and a verified completion on the expected provider/model in the same session. A different model's completion, a zero-token placeholder, an error record or an unrelated session is insufficient. Go must be selected during installation and authenticated locally.
+Superset **1.28 native OpenCode identity and resurrection are the preferred recovery source**. The supervisor follows persisted successor lineage and verifies the same session, host, workspace, harness, definition and exclusive writer. A lifecycle hook alone cannot rebind ownership. After native grace, at most one explicit `--resume-session` fallback is allowed: recheck quota/ownership, retire the already-exited source through Superset, verify retirement, launch without a prompt, then verify the new binding before one continuation. Unconfirmed operations require ownership reconciliation. See the [full recovery contract](superset-1.28.md#recovery-contract).
+
+The v9.9.4.1 Free → Go verification remains unchanged. Free → Go recovery requires fresh, reserve-safe Go telemetry and a verified completion on the expected provider/model in the same session. A different model's completion, a zero-token placeholder, an error record or an unrelated session is insufficient. Go must be selected during installation and authenticated locally.
 
 Keep the user's original prompt separate from runtime policy transport. The OpenCode policy plugin supplies the coordinator bootstrap. A missing policy plugin/file is an error; do not work around it by running without policy enforcement.
 

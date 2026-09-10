@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Superset AUTO v9.9.1 workspace-level worker supervisor.
+"""Superset AUTO v9.9.5 workspace-level worker supervisor.
 
 One non-model daemon supervises every AUTO worker in a workspace. Superset
-lifecycle hooks are the preferred signal; terminal reads are an adaptive
+native bindings own recovery identity; lifecycle hooks wake supervision and terminal reads are an adaptive
 fallback for fatal provider screens and terminals that do not emit enough hook
 state. Durable handoffs remain authoritative.
 """
@@ -22,8 +22,8 @@ import sys
 import time
 from typing import Any, Iterator
 
-MARKER = "SUPERSET_AUTO_WORKSPACE_SUPERVISOR_V991_NATIVE_RESUME"
-VERSION = "9.9.1"
+MARKER = "SUPERSET_AUTO_WORKSPACE_SUPERVISOR_V995_NATIVE_RESUME"
+VERSION = "9.9.5"
 
 HOME = Path(os.environ.get("SUPERSET_HOME_DIR") or (Path.home() / ".superset"))
 ROOT = Path(os.environ.get("SUPERSET_AUTO_WORKSPACE_SUPERVISOR_ROOT") or (HOME / "auto" / "workspace-supervisor"))
@@ -34,7 +34,7 @@ SCAN_NO_HOOK_SECONDS = int(os.environ.get("SUPERSET_AUTO_WORKSPACE_SCAN_NO_HOOK_
 HOOK_FRESH_SECONDS = int(os.environ.get("SUPERSET_AUTO_WORKSPACE_HOOK_FRESH_SECONDS", "45"))
 RESUME_GRACE_SECONDS = int(os.environ.get("SUPERSET_AUTO_NATIVE_RESUME_GRACE_SECONDS", "30"))
 RESUME_CONFIRM_SECONDS = int(os.environ.get("SUPERSET_AUTO_NATIVE_RESUME_CONFIRM_SECONDS", "30"))
-RESUME_MAX_ATTEMPTS = max(0, int(os.environ.get("SUPERSET_AUTO_NATIVE_RESUME_MAX_ATTEMPTS", "1")))
+RESUME_MAX_ATTEMPTS = min(1, max(0, int(os.environ.get("SUPERSET_AUTO_NATIVE_RESUME_MAX_ATTEMPTS", "1"))))
 RESUME_CONTINUE = os.environ.get("SUPERSET_AUTO_NATIVE_RESUME_CONTINUE", "1") == "1"
 RESUME_CONTINUE_TEXT = os.environ.get(
     "SUPERSET_AUTO_NATIVE_RESUME_CONTINUE_TEXT",
@@ -199,6 +199,8 @@ def state_payload(reg: dict[str, Any], *, state: str, failure_class: str | None 
         "nativeResumeAttemptedAt": reg.get("nativeResumeAttemptedAt"),
         "nativeResumeReplacementTerminalId": reg.get("nativeResumeReplacementTerminalId"),
         "nativeResumeSource": reg.get("nativeResumeSource"),
+        "terminalFailure": reg.get("terminalFailure"),
+        "nativeResumeExplicitTerminalId": reg.get("nativeResumeExplicitTerminalId"),
         "nativeResumeContinuationPending": bool(reg.get("nativeResumeContinuationPending")),
         "launchModel": reg.get("launchModel"),
         "launchEffort": reg.get("launchEffort"),
@@ -248,8 +250,8 @@ def find_registration(workspace: str, terminal_id: str, agent_session_id: str | 
             return reg
     if agent_session_id:
         matches = [r for r in regs if r.get("agentSessionId") == agent_session_id and r.get("state") not in {"DONE", "FAILED_TERMINAL", "SUPERVISION_LOST"}]
-        if matches:
-            return max(matches, key=lambda r: int(r.get("updatedEpoch") or 0))
+        if len(matches) == 1:
+            return matches[0]
     return None
 
 
@@ -294,15 +296,16 @@ def _db_rows(query: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
                     rows.append(item)
             finally:
                 con.close()
-        except Exception:
-            continue
+        except (sqlite3.Error, OSError):
+            # An unreadable host is not evidence that no competing writer exists.
+            raise
     return rows
 
 
 def persisted_binding(terminal_id: str, workspace: str) -> dict[str, Any] | None:
     rows = _db_rows(
         """
-        SELECT b.terminal_id,b.workspace_id,b.agent_id,b.agent_session_id,b.ended_at,b.end_reason,
+        SELECT b.terminal_id,b.workspace_id,b.agent_id,b.agent_session_id,b.definition_id,b.ended_at,b.end_reason,b.resumed_into_terminal_id,
                t.status,t.dispose_requested_at,t.ended_at AS terminal_ended_at
           FROM terminal_agent_bindings b
           JOIN terminal_sessions t ON t.id=b.terminal_id
@@ -318,12 +321,12 @@ def persisted_binding(terminal_id: str, workspace: str) -> dict[str, Any] | None
 def active_same_session_bindings(workspace: str, agent_session_id: str, exclude_terminal: str = "") -> list[dict[str, Any]]:
     rows = _db_rows(
         """
-        SELECT b.terminal_id,b.workspace_id,b.agent_id,b.agent_session_id,b.ended_at,b.end_reason,
+        SELECT b.terminal_id,b.workspace_id,b.agent_id,b.agent_session_id,b.definition_id,b.ended_at,b.end_reason,b.resumed_into_terminal_id,
                t.status,t.dispose_requested_at,t.ended_at AS terminal_ended_at
           FROM terminal_agent_bindings b
           JOIN terminal_sessions t ON t.id=b.terminal_id
          WHERE b.workspace_id=? AND b.agent_session_id=?
-           AND b.ended_at IS NULL AND t.status='active' AND t.dispose_requested_at IS NULL
+           AND t.status='active'
         """,
         (workspace, agent_session_id),
     )
@@ -333,25 +336,29 @@ def active_same_session_bindings(workspace: str, agent_session_id: str, exclude_
 def send_resume_continuation(reg: dict[str, Any]) -> bool:
     if not RESUME_CONTINUE:
         return True
-    latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
-    if latest.get("nativeResumeContinuationSent"):
-        return True
-    terminal_id = str(latest.get("currentTerminalId") or "")
-    if not terminal_id:
-        return False
+    with workspace_lock(reg["workspaceId"]):
+        latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+        if latest.get("nativeResumeContinuationAttempted") or latest.get("nativeResumeContinuationSent"):
+            return bool(latest.get("nativeResumeContinuationSent"))
+        terminal_id = str(latest.get("currentTerminalId") or "")
+        row = persisted_binding(terminal_id, latest["workspaceId"])
+        matches = active_same_session_bindings(latest["workspaceId"], str(latest.get("agentSessionId") or ""))
+        if (not owns_binding(latest, row) or row.get("dispose_requested_at") is not None
+                or row.get("ended_at") is not None or len(matches) != 1
+                or matches[0]["terminal_id"] != terminal_id):
+            return False
+        latest["nativeResumeContinuationAttempted"] = True
+        latest["nativeResumeContinuationPending"] = False
+        atomic_json(registration_path(latest["workspaceId"], latest["workerId"]), latest)
     rc, out, err = run_superset([
         "terminals", "send", "--workspace", latest["workspaceId"], "--terminal", terminal_id,
         "--text", RESUME_CONTINUE_TEXT,
     ], timeout=20)
     with workspace_lock(latest["workspaceId"]):
         current = read_json(registration_path(latest["workspaceId"], latest["workerId"])) or latest
-        current["nativeResumeContinuationPending"] = False if rc == 0 else True
         current["nativeResumeContinuationSent"] = rc == 0
         current["nativeResumeContinuationAt"] = now_iso() if rc == 0 else None
-        if rc != 0:
-            current["nativeResumeContinuationError"] = (err or out or f"superset terminals send exited {rc}")[-2000:]
-        else:
-            current["nativeResumeContinuationError"] = None
+        current["nativeResumeContinuationError"] = None if rc == 0 else "send outcome unconfirmed; not retried"
         atomic_json(registration_path(current["workspaceId"], current["workerId"]), current)
     return rc == 0
 
@@ -363,6 +370,9 @@ def rebind_native_resume(reg: dict[str, Any], new_terminal: str, *, source: str,
         latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
         if latest.get("state") in {"DONE", "FAILED_TERMINAL", "SUPERVISION_LOST"}:
             return False
+        verified = verified_successor(latest)
+        if not verified or verified[0] != new_terminal:
+            return False
         old_terminal = str(latest.get("currentTerminalId") or latest.get("workerId"))
         aliases = list(dict.fromkeys([*(latest.get("terminalAliases") or []), old_terminal, new_terminal]))
         latest["terminalAliases"] = aliases
@@ -371,6 +381,7 @@ def rebind_native_resume(reg: dict[str, Any], new_terminal: str, *, source: str,
         latest["nativeResumeDeadlineEpoch"] = None
         latest["nativeResumeReplacementTerminalId"] = new_terminal
         latest["nativeResumeSource"] = source
+        latest["terminalFailure"] = None
         latest["needsPromptScan"] = True
         publish_state(latest, state="RUNNING", reason=f"same-session native resume rebound via {source}")
         emit_event(latest["workspaceId"], "worker.native_resumed", latest, previousTerminalId=old_terminal, source=source)
@@ -386,34 +397,107 @@ def rebind_native_resume(reg: dict[str, Any], new_terminal: str, *, source: str,
 
 
 def learn_agent_session_from_persisted_binding(reg: dict[str, Any]) -> dict[str, Any]:
-    if reg.get("agentSessionId"):
+    """Native host bindings own identity; hooks only wake the supervisor."""
+    if reg.get("nativeHostDb") and reg.get("agentSessionId") and reg.get("nativeAgentIdentity"):
         return reg
-    terminal_id = str(reg.get("currentTerminalId") or reg.get("terminalId") or reg.get("workerId") or "")
-    if not terminal_id:
-        return reg
+    terminal_id = str(reg.get("currentTerminalId") or reg.get("workerId") or "")
     row = persisted_binding(terminal_id, reg["workspaceId"])
-    session_id = str((row or {}).get("agent_session_id") or "")
-    if not session_id:
+    if not row or not row.get("agent_session_id"):
         return reg
     with workspace_lock(reg["workspaceId"]):
         latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
-        if not latest.get("agentSessionId"):
-            latest["agentSessionId"] = session_id
-            atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), latest)
+        if latest.get("agentSessionId") not in (None, row["agent_session_id"]):
+            return latest  # A conversation switch cannot steal the worker contract.
+        if latest.get("nativeHostDb") not in (None, row["_hostDb"]):
+            return latest
+        latest.setdefault("nativeAgentIdentity", row["agent_id"])
+        latest.setdefault("nativeDefinitionId", row.get("definition_id"))
+        latest["nativeHostDb"] = row["_hostDb"]
+        latest["agentSessionId"] = row["agent_session_id"]
+        atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), latest)
         return latest
+
+
+def owns_binding(reg: dict[str, Any], row: dict[str, Any] | None) -> bool:
+    return bool(row and reg.get("agentSessionId") and reg.get("nativeHostDb")
+                and row.get("workspace_id") == reg["workspaceId"]
+                and row.get("_hostDb") == reg["nativeHostDb"]
+                and row.get("agent_session_id") == reg["agentSessionId"]
+                and row.get("agent_id") == reg.get("nativeAgentIdentity")
+                and row.get("definition_id") == reg.get("nativeDefinitionId"))
+
+
+def verified_successor(reg: dict[str, Any]) -> tuple[str, str] | None:
+    """Follow 1.28's persisted lineage, bounded like upstream (16 hops).
+
+    A CLI launch response contains a *terminal* sessionId. It is never proof
+    of the provider conversation. Both native and explicit paths verify that
+    conversation, host, workspace, harness, definition, and exclusive writer.
+    """
+    if reg.get("nativeResumeAttemptCount") and not reg.get("nativeResumeExplicitTerminalId"):
+        return None
+    old = str(reg.get("currentTerminalId") or reg.get("workerId"))
+    row = persisted_binding(old, reg["workspaceId"])
+    if not owns_binding(reg, row) or row["status"] == "active":
+        return None
+    seen = {old}
+    current = old
+    for _ in range(16):
+        if row.get("end_reason") != "resumed":
+            break
+        next_id = row.get("resumed_into_terminal_id")
+        if not next_id or next_id in seen:
+            return None  # Native claim may still be in flight.
+        seen.add(next_id)
+        row = persisted_binding(next_id, reg["workspaceId"])
+        if not owns_binding(reg, row):
+            return None
+        current = next_id
+        if row["status"] == "active":
+            break
+    source = "superset-1.28-native"
+    if current == old:
+        current = reg.get("nativeResumeExplicitTerminalId")
+        if not current or not retired_source(reg, row):
+            return None
+        row = persisted_binding(current, reg["workspaceId"])
+        source = "explicit-verified"
+    if (not owns_binding(reg, row) or row["status"] != "active"
+            or row.get("ended_at") is not None or row.get("dispose_requested_at") is not None):
+        return None
+    matches = active_same_session_bindings(reg["workspaceId"], reg["agentSessionId"])
+    if len(matches) != 1 or matches[0]["terminal_id"] != current or not owns_binding(reg, matches[0]):
+        return None
+    return str(current), source
+
+
+def retire_explicit_race(reg: dict[str, Any]) -> None:
+    explicit = reg.get("nativeResumeExplicitTerminalId")
+    old = persisted_binding(str(reg.get("currentTerminalId") or reg["workerId"]), reg["workspaceId"])
+    if (not explicit or not owns_binding(reg, old) or old.get("status") == "active"
+            or old.get("end_reason") != "resumed" or not old.get("resumed_into_terminal_id")
+            or old["resumed_into_terminal_id"] == explicit):
+        return
+    row = persisted_binding(explicit, reg["workspaceId"])
+    if not owns_binding(reg, row) or row.get("status") != "active":
+        return
+    with workspace_lock(reg["workspaceId"]):
+        latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+        if latest.get("nativeResumeDuplicateCloseAttempted"):
+            return
+        latest["nativeResumeDuplicateCloseAttempted"] = True
+        atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), latest)
+    run_superset(["terminals", "close", "--workspace", reg["workspaceId"],
+                  "--terminal", explicit, "--json"], timeout=20)
 
 
 def detect_native_auto_rebind(reg: dict[str, Any]) -> bool:
     reg = learn_agent_session_from_persisted_binding(reg)
-    session_id = str(reg.get("agentSessionId") or "")
-    if not session_id:
+    retire_explicit_race(reg)
+    successor = verified_successor(reg)
+    if not successor:
         return False
-    old_terminal = str(reg.get("currentTerminalId") or reg.get("terminalId") or reg.get("workerId") or "")
-    matches = active_same_session_bindings(reg["workspaceId"], session_id, old_terminal)
-    if len(matches) != 1:
-        return False
-    new_terminal = str(matches[0].get("terminal_id") or "")
-    return rebind_native_resume(reg, new_terminal, source="host-db-auto", send_continue=True)
+    return rebind_native_resume(reg, successor[0], source=successor[1], send_continue=True)
 
 
 def explicit_resume_gate(reg: dict[str, Any]) -> tuple[bool, str]:
@@ -451,8 +535,14 @@ def explicit_resume_gate(reg: dict[str, Any]) -> tuple[bool, str]:
     return True, ""
 
 
+def retired_source(reg: dict[str, Any], row: dict[str, Any] | None) -> bool:
+    """Only AUTO's recorded retirement can authorize its explicit fallback."""
+    return bool(reg.get("nativeResumeSourceRetireAttempted") and owns_binding(reg, row)
+                and row.get("status") == "disposed" and row.get("end_reason") == "disposed"
+                and row.get("ended_at") is not None and not row.get("resumed_into_terminal_id"))
+
+
 def resume_eligibility(reg: dict[str, Any]) -> tuple[bool, str, dict[str, Any] | None]:
-    reg = learn_agent_session_from_persisted_binding(reg)
     session_id = str(reg.get("agentSessionId") or "")
     if not session_id:
         return False, "no persisted agent session id", None
@@ -460,7 +550,7 @@ def resume_eligibility(reg: dict[str, Any]) -> tuple[bool, str, dict[str, Any] |
     row = persisted_binding(terminal_id, reg["workspaceId"])
     if not row:
         return False, "persisted terminal binding unavailable or ambiguous", None
-    if str(row.get("agent_session_id") or "") != session_id:
+    if not owns_binding(reg, row):
         return False, "persisted agent session does not match supervised worker", row
     if str(row.get("status") or "") != "exited":
         return False, f"terminal status is {row.get('status')!r}, not exited", row
@@ -468,6 +558,8 @@ def resume_eligibility(reg: dict[str, Any]) -> tuple[bool, str, dict[str, Any] |
         return False, "terminal was deliberately disposed", row
     if row.get("ended_at") is None or str(row.get("end_reason") or "") != "terminal-exited":
         return False, f"binding end reason is {row.get('end_reason')!r}, not terminal-exited", row
+    if row.get("resumed_into_terminal_id"):
+        return False, "native successor already recorded", row
     if not reg.get("agentId"):
         return False, "launch agent id unavailable", row
     active = active_same_session_bindings(reg["workspaceId"], session_id, terminal_id)
@@ -481,12 +573,19 @@ def attempt_explicit_native_resume(reg: dict[str, Any]) -> tuple[bool, str]:
     attempts = int(reg.get("nativeResumeAttemptCount") or 0)
     if RESUME_MAX_ATTEMPTS <= 0 or attempts >= RESUME_MAX_ATTEMPTS:
         return False, "native resume attempt limit reached"
+    if (reg.get("state") != "NATIVE_RESUMING"
+            or now_epoch() < int(reg.get("nativeResumeDeadlineEpoch") or 0)):
+        return False, "native automatic recovery grace is protected"
     eligible, reason, _row = resume_eligibility(reg)
     if not eligible:
         return False, reason
     gate_ok, gate_reason = explicit_resume_gate(reg)
     if not gate_ok:
-        fail_worker(reg, "WORKER_QUOTA_TERMINATED", f"native same-session resume blocked by route quota gate: {gate_reason}")
+        if detect_native_auto_rebind(reg):
+            return True, "native recovery won quota-gate race"
+        if not resume_eligibility(reg)[0]:
+            return False, "ownership changed while checking quota"
+        supervision_lost(reg, "explicit resume blocked by route quota gate; reconcile native ownership before replacement")
         return False, "resume blocked by quota gate"
 
     with workspace_lock(reg["workspaceId"]):
@@ -494,10 +593,36 @@ def attempt_explicit_native_resume(reg: dict[str, Any]) -> tuple[bool, str]:
         current_attempts = int(latest.get("nativeResumeAttemptCount") or 0)
         if current_attempts >= RESUME_MAX_ATTEMPTS:
             return False, "native resume attempt limit reached"
-        latest["nativeResumeAttemptCount"] = current_attempts + 1
+        eligible, reason, _row = resume_eligibility(latest)
+        if not eligible or handoff_complete(latest) or latest.get("state") != "NATIVE_RESUMING":
+            return False, reason or "worker no longer needs recovery"
+        if latest.get("nativeResumeSourceRetireAttempted"):
+            return False, "source retirement already attempted; outcome requires reconciliation"
+        latest["nativeResumeSourceRetireAttempted"] = True
+        latest["nativeResumeState"] = "EXPLICIT_LAUNCH"
+        latest["nativeResumeDeadlineEpoch"] = now_epoch() + RESUME_CONFIRM_SECONDS
+        publish_state(latest, state="NATIVE_RESUMING", reason="retiring exited source before explicit resume")
+        reg = latest
+
+    # Superset's killSession marks the old binding disposed before the kill.
+    # Its native claim and this mark are serialized in host.db. A native
+    # claim that won first remains 'resumed' (sticky) and we MUST yield to it.
+    # This uses the public CLI, never direct writes to Superset's database.
+    old_terminal = str(reg.get("currentTerminalId") or reg["workerId"])
+    run_superset(["terminals", "close", "--workspace", reg["workspaceId"],
+                  "--terminal", old_terminal, "--json"], timeout=20)
+    if detect_native_auto_rebind(reg):
+        return True, "native recovery claimed source first"
+    with workspace_lock(reg["workspaceId"]):
+        latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+        row = persisted_binding(old_terminal, reg["workspaceId"])
+        if (not retired_source(latest, row) or handoff_complete(latest)
+                or latest.get("state") != "NATIVE_RESUMING"
+                or active_same_session_bindings(reg["workspaceId"], reg["agentSessionId"])):
+            return False, "source retirement unconfirmed or native recovery owns session"
+        latest["nativeResumeAttemptCount"] = int(latest.get("nativeResumeAttemptCount") or 0) + 1
         latest["nativeResumeAttemptedAt"] = now_iso()
         latest["nativeResumeAttemptedEpoch"] = now_epoch()
-        latest["nativeResumeState"] = "EXPLICIT_LAUNCH"
         latest["nativeResumeDeadlineEpoch"] = now_epoch() + RESUME_CONFIRM_SECONDS
         publish_state(latest, state="NATIVE_RESUMING", reason="launching explicit Superset same-session resume")
         emit_event(latest["workspaceId"], "worker.native_resume_attempt", latest, source="explicit")
@@ -512,50 +637,117 @@ def attempt_explicit_native_resume(reg: dict[str, Any]) -> tuple[bool, str]:
             args += ["--model", str(reg["launchModel"])]
         if reg.get("launchEffort"):
             args += ["--effort", str(reg["launchEffort"])]
-    if RESUME_CONTINUE:
-        args += ["--prompt", RESUME_CONTINUE_TEXT]
+    # Launch idle. Do not send work until native identity and uniqueness settle.
     args += ["--json"]
     rc, out, err = run_superset(args, timeout=30)
-    if rc != 0:
+    with workspace_lock(reg["workspaceId"]):
+        latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
+        # The confirmation window begins after the RPC, including a timeout.
+        latest["nativeResumeDeadlineEpoch"] = now_epoch() + RESUME_CONFIRM_SECONDS
+        if rc != 0:
+            latest["terminalFailure"] = failure_diagnostic(err or out)
+            latest["nativeResumeLastError"] = latest["terminalFailure"]["kind"]
+        else:
+            try:
+                obj = json.loads(out)
+                new_terminal = obj.get("sessionId") or obj.get("terminalId")
+                if isinstance(new_terminal, str) and new_terminal:
+                    latest["nativeResumeExplicitTerminalId"] = new_terminal
+            except (ValueError, AttributeError):
+                pass
+        atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), latest)
+    if detect_native_auto_rebind(latest):
+        return True, ""
+    return False, "explicit launch awaits persisted identity and exclusive ownership"
+
+
+# These are upstream desktop IPC causes, not guaranteed CLI JSON fields.
+# Consume structured causes when present, or their exact rendered messages
+# from a failed control RPC. Never parse a successful terminal screen as IPC.
+SPAWN_FAILURES = {"SHELL_EXITED", "PTY_SPAWN_FAILED", "PTY_SPAWN_TIMEOUT"}
+
+
+def failure_diagnostic(error: Any) -> dict[str, Any]:
+    message = error if isinstance(error, str) else ""
+    if isinstance(error, str):
+        try:
+            error = json.loads(error)
+        except ValueError:
+            error = {}
+    queue = [error]
+    for _ in range(12):
+        if not queue:
+            break
+        value = queue.pop(0)
+        if not isinstance(value, dict):
+            continue
+        kind = value.get("kind")
+        if isinstance(kind, str) and kind in SPAWN_FAILURES:
+            result = {"kind": kind, "source": "control-rpc-cause"}
+            # Shell args, outputHead, arbitrary errors and crash logs can
+            # contain credentials; retain only bounded typed diagnostic facts.
+            for key in ("exitCode", "signal"):
+                number = value.get(key)
+                if type(number) is int and -2147483648 <= number <= 2147483647:
+                    result[key] = number
+            return result
+        if isinstance(value.get("message"), str):
+            message = value["message"]
+        queue.extend(value[k] for k in ("error", "cause", "data", "json") if isinstance(value.get(k), dict))
+    patterns = (
+        (r"Your shell \([^\n]+\) exited immediately with code (-?\d+)", "SHELL_EXITED"),
+        (r"Could not open a PTY for ", "PTY_SPAWN_FAILED"),
+        (r"Timed out waiting for a PTY for ", "PTY_SPAWN_TIMEOUT"),
+        (r"Daemon (?:could not be spawned|was killed by|exited with code)", "DAEMON_STARTUP_FAILED"),
+        (r"Request timeout:|Timeout waiting for connection|daemon may be unresponsive", "DAEMON_TIMEOUT"),
+        (r"TERMINAL_ATTACH_CANCELED|TERMINAL_SESSION_KILLED|Session disposed", "ATTACH_CANCELED_OR_DISPOSED"),
+        (r"Failed to connect stream socket|disconnected|Host unreachable|No pong from client|terminal output back-pressure", "CONTROL_DISCONNECTED"),
+    )
+    for pattern, kind in patterns:
+        match = re.search(pattern, message, re.I)
+        if match:
+            result = {"kind": kind, "source": "control-rpc-message"}
+            if kind == "SHELL_EXITED":
+                result["exitCode"] = int(match.group(1))
+            if kind == "DAEMON_TIMEOUT":
+                result["lateAnswersObserved"] = bool(re.search(r"[1-9]\d* earlier timeout\(s\) answered late", message))
+                result["daemonSpokeDuringWait"] = "daemon last spoke" in message
+                for pattern, key in ((r"daemon last spoke (\d+)ms", "lastSpokeMsAgo"),
+                                     (r"(\d+) other request\(s\) in flight", "otherRequestsInFlight")):
+                    fact = re.search(pattern, message)
+                    if fact:
+                        result[key] = min(int(fact.group(1)), 2147483647)
+            return result
+    return {"kind": "CONTROL_UNKNOWN", "source": "control-rpc"}
+
+
+def finish_recovery(reg: dict[str, Any], reason: str) -> None:
+    # A daemon/client failure is not proof the agent died. An explicit RPC
+    # timeout can still launch later. Neither can release writer ownership.
+    kind = (reg.get("terminalFailure") or {}).get("kind")
+    old = persisted_binding(str(reg.get("currentTerminalId") or reg["workerId"]), reg["workspaceId"])
+    if (kind in SPAWN_FAILURES and not reg.get("nativeResumeAttemptCount")
+            and resume_eligibility(reg)[0] and not reg.get("nativeResumeSourceRetireAttempted")):
         with workspace_lock(reg["workspaceId"]):
             latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
-            latest["nativeResumeLastError"] = (err or out or f"superset agents create exited {rc}")[-2000:]
+            latest["nativeResumeSourceRetireAttempted"] = True
             atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), latest)
-        return False, (err or out or f"superset agents create exited {rc}")[-2000:]
-    try:
-        obj = json.loads(out)
-        new_terminal = str(obj.get("sessionId") or obj.get("terminalId") or "") if isinstance(obj, dict) else ""
-    except Exception as exc:
-        return False, f"invalid native resume JSON: {exc}"
-    if not new_terminal:
-        return False, "native resume returned no terminal/session id"
-
-    # Superset 1.27 binds the replacement terminal to the requested session as
-    # part of the launch itself. Still verify when the local host DB is readable;
-    # if verification lags, retain NATIVE_RESUMING until the confirmation grace.
-    matches = active_same_session_bindings(reg["workspaceId"], str(reg["agentSessionId"]), str(reg.get("currentTerminalId") or ""))
-    match_ids = {str(m.get("terminal_id") or "") for m in matches}
-    if match_ids and (new_terminal not in match_ids or len(match_ids) > 1):
-        # Automatic host recovery raced the explicit fallback. Dispose only the
-        # terminal this supervisor just created, then adopt the one remaining
-        # native binding if it is unambiguous. This prevents duplicate writers.
-        run_superset(["terminals", "close", "--workspace", reg["workspaceId"], "--terminal", new_terminal, "--json"], timeout=20)
-        others = [m for m in matches if str(m.get("terminal_id") or "") != new_terminal]
-        if len(others) == 1:
-            other_terminal = str(others[0].get("terminal_id") or "")
-            if rebind_native_resume(reg, other_terminal, source="host-db-race-winner", send_continue=True):
-                return True, ""
-        return False, "native resume race produced ambiguous same-session bindings; explicit terminal was closed"
-    if rebind_native_resume(reg, new_terminal, source="explicit", send_continue=False):
-        if RESUME_CONTINUE:
-            with workspace_lock(reg["workspaceId"]):
-                latest = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
-                latest["nativeResumeContinuationPending"] = False
-                latest["nativeResumeContinuationSent"] = True
-                latest["nativeResumeContinuationAt"] = now_iso()
-                atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), latest)
-        return True, ""
-    return False, "native resume launched but supervision could not rebind"
+            reg = latest
+        run_superset(["terminals", "close", "--workspace", reg["workspaceId"],
+                      "--terminal", str(reg.get("currentTerminalId") or reg["workerId"]), "--json"], timeout=20)
+        if detect_native_auto_rebind(reg):
+            return
+        old = persisted_binding(str(reg.get("currentTerminalId") or reg["workerId"]), reg["workspaceId"])
+    stopped = retired_source(reg, old)
+    if reg.get("nativeResumeAttemptCount"):
+        # Unknown RPC outcomes and exited explicit terminals can still be
+        # pending/native-resumable; reconcile ownership before replacement.
+        stopped = False
+    if (stopped and kind in SPAWN_FAILURES
+            and not active_same_session_bindings(reg["workspaceId"], reg["agentSessionId"])):
+        fail_worker(reg, "WORKER_" + kind, "confirmed retired binding; " + kind)
+    else:
+        supervision_lost(reg, "native recovery unresolved: " + reason)
 
 
 def terminal_read(workspace: str, terminal_id: str) -> tuple[bool, str, str]:
@@ -564,8 +756,10 @@ def terminal_read(workspace: str, terminal_id: str) -> tuple[bool, str, str]:
         return False, "", err or out
     try:
         obj = json.loads(out)
-        text = obj.get("text") if isinstance(obj, dict) else ""
-        return True, str(text or ""), ""
+        text = obj.get("text") if isinstance(obj, dict) else None
+        if not isinstance(text, str):
+            return False, "", "terminal snapshot response missing text"
+        return True, text, ""
     except Exception as exc:
         return False, "", f"invalid terminal read JSON: {exc}"
 
@@ -630,25 +824,18 @@ def process_lifecycle_event(workspace: str, ev: dict[str, Any]) -> None:
             return
         old_terminal = str(reg.get("currentTerminalId") or reg.get("workerId"))
         old_state = str(reg.get("state") or "RUNNING")
-        tap_previous_terminal = str(ev.get("previousTerminalId") or "") or None
-        if agent_session_id and not reg.get("agentSessionId"):
-            reg["agentSessionId"] = agent_session_id
-        same_session_rebind = bool(
-            agent_session_id
-            and reg.get("agentSessionId") == agent_session_id
-            and (terminal_id != old_terminal or tap_previous_terminal or reg.get("nativeResumeState") == "REBIND_EVENT_PENDING")
-        )
-        if same_session_rebind:
-            previous_terminal = tap_previous_terminal or old_terminal
-            aliases = list(dict.fromkeys([*(reg.get("terminalAliases") or []), previous_terminal, old_terminal, terminal_id]))
-            reg["terminalAliases"] = aliases
-            reg["currentTerminalId"] = terminal_id
-            reg["nativeResumeState"] = "RESUMED"
-            reg["nativeResumeDeadlineEpoch"] = None
-            reg["nativeResumeReplacementTerminalId"] = terminal_id
-            reg["nativeResumeSource"] = "lifecycle"
-            reg["nativeResumeContinuationPending"] = bool(RESUME_CONTINUE and not reg.get("nativeResumeContinuationSent"))
-            emit_event(workspace, "worker.native_resumed", reg, previousTerminalId=previous_terminal, source="lifecycle")
+        if terminal_id != old_terminal:
+            # The next inspection follows native persisted lineage. Late hooks
+            # from an old alias cannot move ownership backwards.
+            reg["needsPromptScan"] = True
+            atomic_json(registration_path(workspace, reg["workerId"]), reg)
+            return
+        if agent_session_id and reg.get("agentSessionId") not in (None, agent_session_id):
+            return
+        if old_state == "NATIVE_RESUMING":
+            reg["needsPromptScan"] = True
+            atomic_json(registration_path(workspace, reg["workerId"]), reg)
+            return
         reg["hookObserved"] = True
         reg["lastLifecycleEvent"] = event_type
         reg["lastLifecycleAt"] = ev.get("at") or now_iso()
@@ -749,20 +936,25 @@ def supervision_lost(reg: dict[str, Any], evidence: str) -> None:
 
 
 def inspect_worker(reg: dict[str, Any]) -> None:
+    try:
+        _inspect_worker(reg)
+    except (sqlite3.Error, OSError):
+        supervision_lost(reg, "native binding database unavailable; ownership must be reconciled")
+
+
+def _inspect_worker(reg: dict[str, Any]) -> None:
     if reg.get("state") in {"DONE", "FAILED_TERMINAL", "SUPERVISION_LOST"}:
         return
     if handoff_complete(reg):
         complete_worker(reg, "valid SUPERSET_WORKER_DONE handoff present")
         return
+    reg = learn_agent_session_from_persisted_binding(reg)
     if reg.get("nativeResumeContinuationPending"):
         send_resume_continuation(reg)
         reg = read_json(registration_path(reg["workspaceId"], reg["workerId"])) or reg
 
-    # Superset 1.27 may have already created a fresh terminal for the same
-    # agent session before the lifecycle hook arrives (notably Codex). During
-    # NATIVE_RESUMING, use the local host binding database as a read-only
-    # second source and rebind immediately when there is exactly one match.
-    if reg.get("state") == "NATIVE_RESUMING" and detect_native_auto_rebind(reg):
+    # Native 1.28 lineage wins even before a read failure or hook arrives.
+    if detect_native_auto_rebind(reg):
         return
 
     now = now_epoch()
@@ -789,7 +981,7 @@ def inspect_worker(reg: dict[str, Any]) -> None:
                 new_deadline = int(latest.get("nativeResumeDeadlineEpoch") or 0)
                 if latest.get("nativeResumeState") == "EXPLICIT_LAUNCH" and new_deadline > now_epoch():
                     return
-                supervision_lost(latest, f"native resume unavailable: {reason}")
+                finish_recovery(latest, reason)
         return
 
     ok, text, err = terminal_read(reg["workspaceId"], current_terminal)
@@ -801,6 +993,10 @@ def inspect_worker(reg: dict[str, Any]) -> None:
         atomic_json(registration_path(reg["workspaceId"], reg["workerId"]), latest)
         reg = latest
 
+    row = persisted_binding(current_terminal, reg["workspaceId"])
+    if row and (row["status"] != "active" or row.get("dispose_requested_at") is not None
+                or row.get("ended_at") is not None):
+        ok = False  # snapshot text can outlive the PTY
     if ok:
         quota = quota_evidence(text)
         if quota:
@@ -837,11 +1033,9 @@ def inspect_worker(reg: dict[str, Any]) -> None:
             publish_state(latest, state="DONE", reason="valid handoff present after terminal became unreadable")
             emit_event(latest["workspaceId"], "worker.completed", latest, terminalClosed=False)
             return
-        # Opportunistically learn the provider-native agent session before the
-        # old binding transitions, so recovery does not depend on hook timing.
-        row = persisted_binding(current_terminal, latest["workspaceId"])
-        if row and not latest.get("agentSessionId") and row.get("agent_session_id"):
-            latest["agentSessionId"] = str(row.get("agent_session_id"))
+        diagnostic = failure_diagnostic(err)
+        if diagnostic["kind"] != "CONTROL_UNKNOWN" or not latest.get("terminalFailure"):
+            latest["terminalFailure"] = diagnostic
         deadline = int(latest.get("nativeResumeDeadlineEpoch") or 0)
         if latest.get("state") != "NATIVE_RESUMING" or deadline <= 0:
             latest["nativeResumeState"] = "GRACE"
@@ -863,7 +1057,7 @@ def inspect_worker(reg: dict[str, Any]) -> None:
         return
     if latest.get("nativeResumeState") == "EXPLICIT_LAUNCH" and int(latest.get("nativeResumeDeadlineEpoch") or 0) > now_epoch():
         return
-    supervision_lost(latest, err[-2000:] if err else f"terminal unreadable; native resume unavailable: {reason}")
+    finish_recovery(latest, reason)
 
 
 def write_heartbeat(workspace: str) -> None:

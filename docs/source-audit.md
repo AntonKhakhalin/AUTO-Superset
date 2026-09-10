@@ -1,5 +1,7 @@
 # Source completeness and publication audit
 
+Current compatibility update: [Superset 1.28 review](superset-1.28.md), dated 2026-09-10, AUTO 9.9.5-public.1. The original packaging audit below is retained as provenance.
+
 Audit date: 2026-09-09. Runtime baseline: AUTO 9.9.4.1. Public packaging revision: 9.9.4.1-public.1.
 
 ## Inputs and treatment
