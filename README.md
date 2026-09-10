@@ -1,7 +1,7 @@
 # AUTO-Superset
 
-[![Release](https://img.shields.io/badge/release-v1.0-blue)](https://github.com/AntonKhakhalin/AUTO-Superset/releases/tag/v1.0)
-[![Superset](https://img.shields.io/badge/Superset-1.27.0%2B-6f42c1)](https://github.com/superset-sh/superset/releases/latest)
+[![AUTO](https://img.shields.io/badge/AUTO-9.9.5--public.1-blue)](CHANGELOG.md)
+[![Superset](https://img.shields.io/badge/Superset-1.28.0%2B-6f42c1)](https://github.com/superset-sh/superset/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)](#compatibility-and-limits)
 [![Status](https://img.shields.io/badge/status-public%20preview-orange)](#compatibility-and-limits)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -10,20 +10,20 @@
 
 AUTO-Superset adds two workflows to [Superset](https://superset.sh): **Fast Fix** for small corrections and **Feature** for work that needs planning and coordinated implementation. It packages the AUTO runtime, OpenCode plugins, agent configuration, and project policies into a portable installer.
 
-**Public preview · macOS · Superset 1.27.0+ · AUTO 9.9.4.1-public.1**
+**Public preview · macOS · Superset 1.28.0+ · AUTO 9.9.5-public.1**
 
 > **Already use Superset?** AUTO-Superset installs alongside your existing setup. It does not replace Superset or your provider CLIs, and the installer is designed to preserve existing Superset projects, sessions, settings, and native agent configurations. Run the dry-run first; successful installs create a restore point.
 
 > This is an independent community project. Superset and each provider CLI are installed separately. Offline installation/recovery checks are included; a live macOS smoke test is still required before relying on unattended operation.
 
-[**Get v1.0**](https://github.com/AntonKhakhalin/AUTO-Superset/releases/tag/v1.0) · [Quick start](#quick-start) · [Setup guide](docs/setup.md) · [Workflow](docs/workflow.md) · [Troubleshooting](docs/troubleshooting.md) · [Source audit](docs/source-audit.md)
+[**Superset 1.28 update**](docs/superset-1.28.md) · [Quick start](#quick-start) · [Setup guide](docs/setup.md) · [Workflow](docs/workflow.md) · [Troubleshooting](docs/troubleshooting.md) · [Source audit](docs/source-audit.md)
 
 ## Already use Superset? Start here
 
 If Superset and your preferred provider CLI are already working, the shortest safe path is:
 
 1. Stop active AUTO workers and quit Superset completely.
-2. Clone this repository or download the reviewed [v1.0 release](https://github.com/AntonKhakhalin/AUTO-Superset/releases/tag/v1.0).
+2. Use this updated checkout; the older v1.0 archive targets the previous Superset baseline.
 3. Preview the install before changing anything.
 4. Install only the provider routes you actually want.
 5. Initialize your repository's AUTO project policy, then run the doctor and live smoke test.
@@ -46,7 +46,8 @@ You do **not** need every supported provider. The default selection is OpenCode 
 
 - **Two task profiles.** Fast Fix keeps small work narrow; Feature introduces a planner and scoped workers when useful.
 - **Quota-aware routing.** Reads available quota information before dispatch, with provider-specific gates and explicit provider selection.
-- **Worker supervision.** One local supervisor tracks registered workers, completion, permission prompts, failures, and native resume state.
+- **Native OpenCode recovery.** Superset 1.28 gets the first chance to resurrect the same session. AUTO verifies its persisted successor, preserves worker ownership, and retains one guarded explicit fallback.
+- **Worker supervision.** One local supervisor tracks workers, durable completion, permission prompts, and distinct PTY/daemon failure information.
 - **Free → Go recovery.** Preserves the Muse session when the selected, authenticated Go route has sufficient quota. Recovery completion must match the exact session and model route.
 - **Cleaner coordinator output.** Isolates OpenCode presentation preferences and supplies concise status messages.
 - **Project-specific rules.** Loads your repository's `AGENTS.md` and `.superset/AUTO_PROJECT.md` with policy fingerprints and integration checks.
@@ -69,7 +70,7 @@ AUTO never schedules extra work just to consume subscription quota. Unselected p
 
 ### 1. Prepare Superset and your CLIs
 
-Install the [latest Superset desktop release](https://github.com/superset-sh/superset/releases/latest), sign in, and initialize a local workspace. Enable its CLI using the app's setup instructions.
+Install Superset **1.28.0 or newer** from the [desktop releases](https://github.com/superset-sh/superset/releases/latest), sign in, and initialize a local workspace. Enable its CLI using the app's setup instructions.
 
 Install Python 3.10+, Git, Node.js, jq, zsh, [OpenCode](https://opencode.ai/docs/), and the worker CLI you want to use. The default selection is OpenCode + Codex. Sign in to providers yourself; this project supplies no credentials or subscriptions.
 
@@ -139,7 +140,7 @@ Use a small, reversible task first, such as a documentation correction. Follow t
 
 ## Updates and restore
 
-Stop active AUTO workers and quit Superset before installing an update. Pull the reviewed changes and rerun the installer with your chosen providers. Changed files receive a new restore point; identical installs are no-ops.
+For the 1.28 update, stop AUTO workers, update and reopen Superset to finish host migrations and regenerate its OpenCode integration, then quit Superset before installing AUTO. Pull the reviewed changes and rerun the installer with your chosen providers. Changed files receive a new restore point; identical installs are no-ops.
 
 ```sh
 python3 scripts/setup.py restore /path/to/restore-point --dry-run
@@ -150,7 +151,7 @@ Restore points are printed after installation. Restore refuses to overwrite file
 
 ## Compatibility and limits
 
-- Superset **1.27.0** is the source-reviewed baseline; its CLI exposes per-launch `--model`, `--effort`, and `--resume-session`. Newer releases require a smoke test. [Upstream implementation](https://github.com/superset-sh/superset/blob/desktop-v1.27.0/packages/cli/src/commands/agents/create/command.ts)
+- Superset **1.28.0** is the source-reviewed baseline. The installer requires its migrated native-recovery schema and CLI 1.28.0+. See the [change review and upgrade checklist](docs/superset-1.28.md). Newer releases require a smoke test. [Upstream implementation](https://github.com/superset-sh/superset/blob/desktop-v1.28.0/packages/cli/src/commands/agents/create/command.ts)
 - The supplied runtime came from an **OpenCode 1.18.29** setup. It uses OpenCode plugin hooks, local session storage, and TUI preferences that can change between releases.
 - The installer supports **macOS**. Linux CI checks portability of source and fixture behavior; it does not establish Linux desktop support. Windows is not supported by this installer.
 - Some quota adapters use provider web endpoints or local databases. Unknown quota is not proof of available capacity. Muse Free thresholds are estimates, not a provider guarantee.
@@ -161,3 +162,4 @@ Restore points are printed after installation. Restore refuses to overwrite file
 Run `python3 -B scripts/validate.py` before opening a pull request. Add focused regression coverage for changes to installation, recovery, or policy enforcement. Share sanitized diagnostics; never upload your entire Superset directory.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [MIT license](LICENSE).
+

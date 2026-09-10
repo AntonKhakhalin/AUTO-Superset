@@ -22,6 +22,8 @@ class InstallTests(unittest.TestCase):
         con = sqlite3.connect(self.db)
         types = {"display_order": "integer", "created_at": "integer", "updated_at": "integer"}
         con.execute("create table host_agent_configs (" + ",".join(k + " " + types.get(k, "text") + (" primary key" if k == "id" else "") for k in setup.COLS) + ")")
+        con.execute("create table terminal_agent_bindings (terminal_id text, workspace_id text, agent_id text, agent_session_id text, definition_id text, ended_at integer, end_reason text, resumed_into_terminal_id text)")
+        con.execute("create table terminal_sessions (id text, status text, dispose_requested_at integer, ended_at integer)")
         con.execute("create table workspaces (id text, branch text)")
         con.execute("insert into workspaces values ('local-test', 'preserve-me')")
         con.commit()
@@ -95,6 +97,15 @@ class InstallTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Unsupported"):
             setup.install(self.home, self.db, {"opencode"})
         self.assertEqual(self.rows("workspaces"), [("local-test", "preserve-me")])
+
+    def test_unmigrated_127_host_fails_before_install(self):
+        with sqlite3.connect(self.db) as con:
+            con.execute("alter table terminal_agent_bindings drop column resumed_into_terminal_id")
+        before = self.db.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, "1.28 recovery schema"):
+            setup.install(self.home, self.db, {"opencode"})
+        self.assertEqual(self.db.read_bytes(), before)
+        self.assertFalse((self.home / ".superset/bin").exists())
 
     def test_duplicate_labels_are_rejected(self):
         _, rows, _ = setup.plan(self.home, {"opencode"}, self.db)

@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Idempotently add the AUTO v9.8.23 lifecycle tap to Superset's managed hook."""
+"""Idempotently add the AUTO v9.9.5 lifecycle tap to Superset's managed hook."""
 from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
 import sys
 import time
 
-MARKER = "SUPERSET_AUTO_LIFECYCLE_TAP_V9823_HOOK"
+MARKER = "SUPERSET_AUTO_LIFECYCLE_TAP_V995_HOOK"
 MIRROR_MARKER = "SUPERSET_AUTO_COORDINATOR_CONVERSATION_MIRROR_V9823"
 NEEDLE = '[ -z "$EVENT_TYPE" ] && exit 0\n'
 BLOCK = r'''
-# SUPERSET_AUTO_LIFECYCLE_TAP_V9823_HOOK
+# SUPERSET_AUTO_LIFECYCLE_TAP_V995_HOOK
 # AUTO observes the same already-normalized lifecycle event Superset is about
 # to dispatch. The tap is best-effort and only records registered AUTO workers.
 AUTO_LIFECYCLE_TAP="${SUPERSET_HOME_DIR:-$HOME/.superset}/bin/auto-lifecycle-tap"
@@ -22,12 +23,12 @@ if [ -n "$SUPERSET_WORKSPACE_ID" ] && [ -n "$SUPERSET_TERMINAL_ID" ] && [ -x "$A
   "$AUTO_LIFECYCLE_TAP" \
     --workspace "$SUPERSET_WORKSPACE_ID" \
     --terminal "$SUPERSET_TERMINAL_ID" \
-    --agent "${SUPERSET_AGENT_ID:-}" \
+    --agent "${AGENT_ID:-${SUPERSET_AGENT_ID:-}}" \
     --session "${SESSION_ID:-}" \
     --event "$EVENT_TYPE" \
     </dev/null >/dev/null 2>&1 || true
 fi
-# END SUPERSET_AUTO_LIFECYCLE_TAP_V9823_HOOK
+# END SUPERSET_AUTO_LIFECYCLE_TAP_V995_HOOK
 '''
 
 
@@ -80,6 +81,9 @@ def main() -> int:
         if not ns.quiet:
             print(f"AUTO hook tap helper is missing or not executable: {tap}", file=sys.stderr)
         return 2
+    # Replace only our old bounded managed block; preserve every other hook.
+    text = re.sub(r"\n# SUPERSET_AUTO_LIFECYCLE_TAP_V9823_HOOK\n.*?"
+                  r"# END SUPERSET_AUTO_LIFECYCLE_TAP_V9823_HOOK\n", "\n", text, flags=re.S)
     replacement = NEEDLE + BLOCK + "\n"
     patched = text.replace(NEEDLE, replacement, 1)
     st = target.stat()

@@ -79,8 +79,8 @@ def find_match(workspace: str, terminal: str, session: str | None) -> tuple[Path
             return p, reg
     if session:
         matches = [(p, r) for p, r in regs if r.get("agentSessionId") == session]
-        if matches:
-            return max(matches, key=lambda pr: int(pr[1].get("updatedEpoch") or 0))
+        if len(matches) == 1:
+            return matches[0]
     return None
 
 
@@ -109,16 +109,6 @@ def main() -> int:
         path, reg = matched
         old_terminal = str(reg.get("currentTerminalId") or reg.get("workerId"))
         session = ns.session.strip() or None
-        if session and not reg.get("agentSessionId"):
-            reg["agentSessionId"] = session
-        if session and reg.get("agentSessionId") == session and terminal != old_terminal:
-            aliases = list(dict.fromkeys([*(reg.get("terminalAliases") or []), old_terminal, terminal]))
-            reg["terminalAliases"] = aliases
-            reg["currentTerminalId"] = terminal
-            reg["nativeResumeState"] = "REBIND_EVENT_PENDING"
-        reg["lastTapAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        reg["lastTapEpoch"] = int(time.time())
-        atomic_json(path, reg)
         event = {
             "version": VERSION,
             "marker": MARKER,

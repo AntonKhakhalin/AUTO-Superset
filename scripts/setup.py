@@ -66,8 +66,8 @@ def preflight(home, providers):
     cli = shutil.which("superset") or str(home / ".superset/bin/superset")
     cp = subprocess.run([cli, "--version"], text=True, capture_output=True, timeout=15)
     version = re.search(r"(\d+)\.(\d+)\.(\d+)", cp.stdout + cp.stderr)
-    if cp.returncode or not version or tuple(map(int, version.groups())) < (1, 27, 0):
-        raise RuntimeError("Superset CLI 1.27.0+ is required; update Superset and regenerate its CLI wrapper.")
+    if cp.returncode or not version or tuple(map(int, version.groups())) < (1, 28, 0):
+        raise RuntimeError("Superset CLI 1.28.0+ is required; update Superset and regenerate its CLI wrapper.")
 
 
 def find_db(home: Path, explicit=None) -> Path:
@@ -84,6 +84,17 @@ def validate_schema(con):
     columns = {r[1] for r in con.execute("pragma table_info(host_agent_configs)")}
     if not set(COLS) <= columns:
         raise RuntimeError("Unsupported Superset host-agent schema; no changes were made.")
+    required = {
+        "terminal_agent_bindings": {"terminal_id", "workspace_id", "agent_id", "agent_session_id",
+                                    "definition_id", "ended_at", "end_reason", "resumed_into_terminal_id"},
+        "terminal_sessions": {"id", "status", "dispose_requested_at", "ended_at"},
+    }
+    for table, expected in required.items():
+        actual = {r[1] for r in con.execute("pragma table_info(" + table + ")")}
+        if not expected <= actual:
+            raise RuntimeError("Unsupported Superset 1.28 recovery schema; open the updated app "
+                               "to finish host migrations, then quit it. No tables were created.")
+
 
 
 def merge_dict(old, new, path=""):
@@ -282,9 +293,19 @@ def doctor(home):
     try:
         cp = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10)
         match = re.search(r"(\d+)\.(\d+)\.(\d+)", cp.stdout + cp.stderr)
-        check(cp.returncode == 0 and bool(match) and tuple(map(int, match.groups())) >= (1, 27, 0), "Superset CLI 1.27.0+")
+        check(cp.returncode == 0 and bool(match) and tuple(map(int, match.groups())) >= (1, 28, 0), "Superset CLI 1.28.0+")
     except (OSError, subprocess.TimeoutExpired):
         check(False, "Superset CLI version")
+    try:
+        with sqlite3.connect(find_db(home).as_uri() + "?mode=ro", uri=True) as con:
+            validate_schema(con)
+        check(True, "Superset 1.28 native recovery schema")
+    except (RuntimeError, sqlite3.Error, OSError):
+        check(False, "Superset 1.28 native recovery schema (open updated app to migrate; verify local host)")
+    plugin = home / ".superset/hooks/opencode/plugin/superset-notify.js"
+    plugin_text = plugin.read_text() if plugin.is_file() else ""
+    check("session_id: sessionID" in plugin_text and "SUPERSET_HOOK_HARNESS=opencode" in plugin_text,
+          "Superset native OpenCode identity plugin (regenerate with Superset 1.28)")
     settings = read_json(home / ".superset/auto/public-settings.json", {})
     check(bool(settings), "AUTO installed")
     for src in (ROOT / "runtime/bin").iterdir():

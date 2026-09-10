@@ -1,9 +1,13 @@
 {
-  "supersetMinimumVersion": "1.27.0",
-  "supersetSourceTag": "desktop-v1.27.0",
-  "sourceReviewedAt": "2026-09-09",
+  "supersetMinimumVersion": "1.28.0",
+  "supersetSourceTag": "desktop-v1.28.0",
+  "sourceReviewedAt": "2026-09-10",
   "opencodeSourceBaseline": "1.18.29",
   "pythonMinimumVersion": "3.10",
   "platform": "macOS",
-  "liveMacValidation": "pending"
+  "liveMacValidation": "pending",
+  "supersetSourceCommit": "a415227dc25f806dd3ef6bf05b464adba5ac08fb",
+  "nativeRecoverySource": "OpenCode root session ID and persisted resumed_into_terminal_id lineage",
+  "hostRecoverySchema": "terminal_agent_bindings.resumed_into_terminal_id (0033)",
+  "freeGoVerificationBaseline": "9.9.4.1 (unchanged)"
 }

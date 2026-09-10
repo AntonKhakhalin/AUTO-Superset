@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-Use macOS with the [latest Superset release](https://github.com/superset-sh/superset/releases/latest). The source-reviewed baseline is desktop/CLI 1.27.0; the runtime's supplied OpenCode baseline is 1.18.29. Install Python 3.10+, Git, Node.js, jq and zsh. Python uses only the standard library.
+Use macOS with the [latest Superset release](https://github.com/superset-sh/superset/releases/latest). The source-reviewed baseline is desktop/host/CLI 1.28.0; the runtime's supplied OpenCode baseline is 1.18.29. Install Python 3.10+, Git, Node.js, jq and zsh. Python uses only the standard library.
 
 If Homebrew is already installed, the general utilities can be installed with:
 
@@ -31,7 +31,7 @@ bash install.sh --host-db /path/to/the/intended/host.db --dry-run
 bash install.sh --host-db /path/to/the/intended/host.db
 ```
 
-The installer checks the `host_agent_configs` schema against the source-reviewed format. It adds rows in a SQLite transaction and backs up changed files with owner-only permissions. It does not replace the host database. Do not restart Superset during installation.
+The installer checks `host_agent_configs` and the 1.28 terminal-binding schema, including `resumed_into_terminal_id`. Open the updated Superset once to complete its own migrations before installing AUTO. It adds rows in a SQLite transaction and backs up changed files with owner-only permissions. It does not replace the host database. Do not restart Superset during installation.
 
 ## OpenCode configuration
 
@@ -84,6 +84,8 @@ Commit the reviewed policy/setup files to your project so new worktrees inherit 
 7. If you selected Go, test it manually before relying on fallback. Actual automatic cap/recovery behavior remains a separate live acceptance item; do not exhaust a quota merely to test it.
 
 Offline tests prove specific recovery-evidence checks with fixtures; they do not certify a real provider's billing, model availability, session recovery or TUI behavior.
+
+For 1.28 native recovery, also follow the [recovery acceptance checklist](superset-1.28.md#upgrade-and-live-acceptance).
 
 ## Upgrade and uninstall
 

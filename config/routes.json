@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "workflowRevision": "9.9.4.1-public.1",
-  "supersetMinimumVersion": "1.27.0",
+  "workflowRevision": "9.9.5-public.1",
+  "supersetMinimumVersion": "1.28.0",
   "description": "Logical routes inherited from AUTO 9.9.4.1; verify models and efforts against your installed provider catalog.",
   "routes": {
     "Codex · Astra Planner XHigh": {
@@ -39,7 +39,7 @@
       "effort": "ultra",
       "capability": "IMPLEMENT",
       "quotaPool": "codex",
-      "reason": "Superset 1.27.0 intentionally does not advertise Astra Ultra; preserve the existing custom escape hatch until the live Codex catalog and Superset both authorize it."
+      "reason": "Superset 1.28.0 intentionally does not advertise Astra Ultra; preserve the existing custom escape hatch until the live Codex catalog and Superset both authorize it."
     },
     "Codex · Sol XHigh": {
       "launchMode": "native",
@@ -142,7 +142,7 @@
       "effort": "high",
       "capability": "IMPLEMENT",
       "quotaPool": "cursorOtherModels",
-      "notes": "Uses Superset 1.27.0's curated Fable 5 thinking/high Cursor family rather than the old uncurated claude-fable-5 token."
+      "notes": "Uses Superset 1.28.0's curated Fable 5 thinking/high Cursor family rather than the old uncurated claude-fable-5 token."
     }
   }
 }
